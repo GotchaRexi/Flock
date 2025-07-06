@@ -86,9 +86,22 @@ sipped — Mark yourself as sipped once race is full
     await db.query(`INSERT INTO entries (race_id, user_id, username) VALUES ${entries.join(', ')}`);
     await db.query('UPDATE races SET remaining_spots = 0, closed = true WHERE id = $1', [race.id]);
 
-    const finalEntries = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
+   /* const finalEntries = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
     const mentions = finalEntries.rows.map(r => `<@${r.user_id}>`).join(', ');
     await message.channel.send(`${targetName} claimed the final ${claimCount} spot(s). The race is now full! ${mentions} please sip when available.`);
+    */
+
+    const finalEntries = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
+    const alreadySipped = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
+    const alreadySippedIds = new Set(alreadySipped.rows.map(r => r.user_id));
+
+    const unsippedMentions = finalEntries.rows
+    .filter(r => !alreadySippedIds.has(r.user_id))
+    .map(r => `<@${r.user_id}>`)
+    .join(', ');
+
+    await message.channel.send(`The race is now full! ${unsippedMentions} please sip when available.`);
+
     return;
   }
 
