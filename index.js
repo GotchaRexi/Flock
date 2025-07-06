@@ -48,14 +48,14 @@ client.on('messageCreate', async (message) => {
     if (alreadySipped.rows.length > 0) return message.reply('You already sipped this race.');
 
     await db.query('INSERT INTO sips (race_id, user_id) VALUES ($1, $2)', [race.id, message.author.id]);
-    await message.reply('Sipped recorded. Thank you!');
+    await message.reply('Sip recorded. Thank you!');
 
     const entrants = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
     const allSipped = entrants.rows.every(e => alreadySipped.rows.some(s => s.user_id === e.user_id) || e.user_id === message.author.id);
 
     if (allSipped) {
       const mentions = entrants.rows.map(r => `<@${r.user_id}>`).join(', ');
-      await message.channel.send(`${mentions} The race is full and sipped, ready to run!`);
+      await message.channel.send(`${mentions} The race is full, sipped, and ready to run!`);
     }
     return;
   }
