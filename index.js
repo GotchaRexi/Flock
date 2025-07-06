@@ -45,8 +45,7 @@ sipped — Mark yourself as sipped once race is full
 !status <name> — Show current summary of the race
 !cancel <name> — Cancel an active race (Quack Commanders only)
 !reset <name> — Clear all entries from a race (Quack Commanders only)
-!forceclose <name> — Force a race to close early (Quack Commanders only)
-!wipe — Clears all race data (Quack Commanders only, requires confirmation)`);
+!forceclose <name> — Force a race to close early (Quack Commanders only)`);
   }
 
   // !start
@@ -179,7 +178,7 @@ sipped — Mark yourself as sipped once race is full
   if (content === '!wipe') {
     if (!isCommander) return;
     pendingWipes.set(channelId, message.author.id);
-    return message.reply('Are you sure you want to wipe all race data? Type `confirm` to proceed.');
+    return message.reply('Are you sure you want to delete all bot data? You should only do this if there is a fatal data error. Type `confirm` to proceed.');
   }
 
   if (content === 'confirm' && pendingWipes.get(channelId) === message.author.id) {
