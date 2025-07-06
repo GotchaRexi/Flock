@@ -27,52 +27,70 @@ client.on('messageCreate', async (message) => {
   const isCommander = message.member.roles.cache.some(role => role.name === 'Quack Commander');
   const channelId = message.channel.id;
 
-  // Start race
+  // Start race with name
   if (isCommander && message.content.toLowerCase().startsWith('start race')) {
-    const total = parseInt(message.content.split(' ')[2]);
-    if (isNaN(total) || total <= 0) return message.reply('Invalid spot count.');
+    const parts = message.content.trim().split(/\s+/);
+    const raceName = parts[2];
+    const total = parseInt(parts[3]);
+    if (!raceName || isNaN(total) || total <= 0) return message.reply('Usage: start race <name> <spots>');
 
-    const res = await db.query('SELECT COUNT(*) FROM races WHERE channel_id = $1 AND closed = false', [channelId]);
-    if (parseInt(res.rows[0].count) > 0) return message.reply('A race is already running in this channel.');
+    const res = await db.query('SELECT COUNT(*) FROM races WHERE channel_id = $1 AND name = $2 AND closed = false', [channelId, raceName]);
+    if (parseInt(res.rows[0].count) > 0) return message.reply('A race with that name is already running in this channel.');
 
     const { rows } = await db.query(
-      'INSERT INTO races (channel_id, race_number, total_spots, remaining_spots) VALUES ($1, COALESCE((SELECT MAX(race_number)+1 FROM races WHERE channel_id = $1), 1), $2, $2) RETURNING race_number',
-      [channelId, total]
+      'INSERT INTO races (channel_id, name, race_number, total_spots, remaining_spots) VALUES ($1, $2, COALESCE((SELECT MAX(race_number)+1 FROM races WHERE channel_id = $1), 1), $3, $3) RETURNING race_number',
+      [channelId, raceName, total]
     );
-    return message.channel.send(`Race #${rows[0].race_number} started with ${total} spots! Type X<number> to claim spots.`);
+    return message.channel.send(`Race "${raceName}" (#${rows[0].race_number}) started with ${total} spots! Type X<number> to claim spots.`);
   }
 
-  // Cancel race
-  if (isCommander && message.content.toLowerCase() === 'cancel race') {
-    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1', [channelId]);
-    if (rows.length === 0 || rows[0].closed) {
-      return message.reply('There is no active race to cancel in this channel.');
-    }
+  // Cancel race with name
+  if (isCommander && message.content.toLowerCase().startsWith('cancel ')) {
+    const raceName = message.content.split(/\s+/)[1];
+    if (!raceName) return message.reply('Usage: cancel <raceName>');
+
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 AND closed = false ORDER BY id DESC LIMIT 1', [channelId, raceName]);
+    if (rows.length === 0) return message.reply(`No active race named "${raceName}" to cancel.`);
 
     await db.query('UPDATE races SET closed = true WHERE id = $1', [rows[0].id]);
-    await message.channel.send(`Race #${rows[0].race_number} has been cancelled.`);
-    return;
+    return message.channel.send(`Race "${raceName}" has been cancelled.`);
   }
 
-  // Force close race (even if one doesn't exist cleanly)
-  if (isCommander && message.content.toLowerCase() === '!forceclose') {
-    await db.query('UPDATE races SET closed = true WHERE channel_id = $1 AND closed = false', [channelId]);
-    await message.channel.send(`Force-closed any open races in this channel.`);
-    return;
+  // Force close race with name
+  if (isCommander && message.content.toLowerCase().startsWith('!forceclose ')) {
+    const raceName = message.content.split(/\s+/)[1];
+    if (!raceName) return message.reply('Usage: !forceclose <raceName>');
+
+    await db.query('UPDATE races SET closed = true WHERE channel_id = $1 AND name = $2 AND closed = false', [channelId, raceName]);
+    return message.channel.send(`Force-closed any open races named "${raceName}" in this channel.`);
   }
 
-  // Reset race
-  if (isCommander && message.content.toLowerCase() === '!reset') {
-    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
-    if (rows.length === 0) return message.reply('There is no active race to reset.');
+  // Reset race with name
+  if (isCommander && message.content.toLowerCase().startsWith('!reset ')) {
+    const raceName = message.content.split(/\s+/)[1];
+    if (!raceName) return message.reply('Usage: !reset <raceName>');
+
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 AND closed = false ORDER BY id DESC LIMIT 1', [channelId, raceName]);
+    if (rows.length === 0) return message.reply(`No active race named "${raceName}" to reset.`);
 
     await db.query('DELETE FROM entries WHERE race_id = $1', [rows[0].id]);
     await db.query('UPDATE races SET remaining_spots = total_spots WHERE id = $1', [rows[0].id]);
-    await message.channel.send(`Race #${rows[0].race_number} has been reset. All entries cleared.`);
-    return;
+    return message.channel.send(`Race "${raceName}" has been reset. All entries cleared.`);
   }
 
-  // List entries
+  // Race status
+  if (message.content.toLowerCase().startsWith('!status ')) {
+    const raceName = message.content.split(/\s+/)[1];
+    if (!raceName) return message.reply('Usage: !status <raceName>');
+
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
+    if (rows.length === 0) return message.reply(`No race found with name "${raceName}" in this channel.`);
+
+    const race = rows[0];
+    return message.channel.send(`Race "${race.name}" status: ${race.remaining_spots}/${race.total_spots} spots remaining${race.closed ? ' (closed)' : ''}.`);
+  }
+
+  // List entries (unchanged)
   if (message.content.toLowerCase() === '!list') {
     const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
     if (rows.length === 0) return message.reply('There is no active race to list.');
@@ -82,7 +100,7 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`Current entries: ${entryRows[0].count}`);
   }
 
-  // Claim spots
+  // Claim spots (unchanged)
   const match = message.content.trim().match(/^x(\d+)$/i);
   console.log(`Regex match result:`, match); // Debug logging
 
