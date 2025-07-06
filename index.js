@@ -38,7 +38,7 @@ client.on('messageCreate', async (message) => {
     if (parseInt(res.rows[0].count) > 0) return message.reply('A race with that name is already running in this channel.');
 
     const { rows } = await db.query(
-      'INSERT INTO races (channel_id, name, race_number, total_spots, remaining_spots) VALUES ($1, $2, COALESCE((SELECT MAX(race_number)+1 FROM races WHERE channel_id = $1), 1), $3, $3) RETURNING race_number',
+      'INSERT INTO races (channel_id, name, race_number, total_spots, remaining_spots, closed) VALUES ($1, $2, COALESCE((SELECT MAX(race_number)+1 FROM races WHERE channel_id = $1), 1), $3, $3, false) RETURNING race_number',
       [channelId, raceName, total]
     );
     return message.channel.send(`Race "${raceName}" (#${rows[0].race_number}) started with ${total} spots! Type X<number> to claim spots.`);
@@ -90,7 +90,7 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`Race "${race.name}" status: ${race.remaining_spots}/${race.total_spots} spots remaining${race.closed ? ' (closed)' : ''}.`);
   }
 
-  // List entries (unchanged)
+  // List entries
   if (message.content.toLowerCase() === '!list') {
     const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
     if (rows.length === 0) return message.reply('There is no active race to list.');
@@ -100,7 +100,7 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`Current entries: ${entryRows[0].count}`);
   }
 
-  // Claim spots (unchanged)
+  // Claim spots
   const match = message.content.trim().match(/^x(\d+)$/i);
   console.log(`Regex match result:`, match); // Debug logging
 
