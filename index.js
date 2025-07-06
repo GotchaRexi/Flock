@@ -114,7 +114,7 @@ client.on('messageCreate', async (message) => {
 
     if (newRemaining === 0) {
       await db.query('UPDATE races SET closed = true WHERE id = $1', [race.id]);
-      const finalEntries = await db.query('SELECT user_id FROM entries WHERE race_id = $1', [race.id]);
+      const finalEntries = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
       const mentions = finalEntries.rows.map(r => `<@${r.user_id}>`).join(', ');
       await message.channel.send(`The race is now full! ${mentions} please sip when available.`);
     }
