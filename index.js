@@ -68,10 +68,15 @@ client.on('messageCreate', async (message) => {
 
     if (claimCount > race.remaining_spots) return message.reply(`Only ${race.remaining_spots} spots left!`);
 
-    const insertText = 'INSERT INTO entries (race_id, user_id, username) VALUES ' +
-      Array(claimCount).fill(`($1, $2, $3)`).join(', ');
-    const insertParams = Array(claimCount).fill([race.id, message.author.id, message.author.username]).flat();
-    await db.query(insertText, insertParams);
+    const values = [];
+    const placeholders = [];
+    for (let i = 0; i < claimCount; i++) {
+      const idx = i * 3;
+      placeholders.push(`($${idx + 1}, $${idx + 2}, $${idx + 3})`);
+      values.push(race.id, message.author.id, message.author.username);
+    }
+
+    await db.query(`INSERT INTO entries (race_id, user_id, username) VALUES ${placeholders.join(', ')}`, values);
 
     const newRemaining = race.remaining_spots - claimCount;
     await db.query('UPDATE races SET remaining_spots = $1 WHERE id = $2', [newRemaining, race.id]);
