@@ -10,6 +10,15 @@ const { Client: PGClient } = pkg;
 const db = new PGClient({ connectionString: process.env.DATABASE_URL });
 await db.connect();
 
+// Ensure sips table exists with composite key
+await db.query(`
+  CREATE TABLE IF NOT EXISTS sips (
+    race_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    PRIMARY KEY (race_id, user_id)
+  );
+`);
+
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
   partials: [Partials.Message, Partials.Channel, Partials.Reaction]
@@ -45,7 +54,6 @@ client.on('messageCreate', async (message) => {
     const allSipped = entrants.rows.every(e => alreadySipped.rows.some(s => s.user_id === e.user_id) || e.user_id === message.author.id);
 
     if (allSipped) {
-      const starter = await db.query('SELECT username FROM entries WHERE race_id = $1 ORDER BY rowid ASC LIMIT 1', [race.id]);
       const mentions = entrants.rows.map(r => `<@${r.user_id}>`).join(', ');
       await message.channel.send(`${mentions} The race is full and sipped, ready to run!`);
     }
