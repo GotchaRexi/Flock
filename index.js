@@ -22,6 +22,8 @@ client.once('ready', () => {
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
+  console.log(`Received: ${message.content}`); // Debug logging
+
   const isCommander = message.member.roles.cache.some(role => role.name === 'Quack Commander');
   const channelId = message.channel.id;
 
@@ -54,6 +56,8 @@ client.on('messageCreate', async (message) => {
 
   // Claim spots
   const match = message.content.trim().match(/^x(\d+)$/i);
+  console.log(`Regex match result:`, match); // Debug logging
+
   if (match) {
     const claimCount = parseInt(match[1]);
     if (isNaN(claimCount) || claimCount <= 0) return;
