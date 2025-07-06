@@ -29,6 +29,29 @@ client.on('messageCreate', async (message) => {
   const isCommander = message.member.roles.cache.some(role => role.name === 'Quack Commander');
   const channelId = message.channel.id;
 
+  // Handle "sipped"
+  if (message.content.toLowerCase().trim() === 'sipped') {
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = true ORDER BY id DESC LIMIT 1', [channelId]);
+    if (rows.length === 0) return;
+
+    const race = rows[0];
+    const alreadySipped = await db.query('SELECT * FROM sips WHERE race_id = $1 AND user_id = $2', [race.id, message.author.id]);
+    if (alreadySipped.rows.length > 0) return message.reply('You already sipped this race.');
+
+    await db.query('INSERT INTO sips (race_id, user_id) VALUES ($1, $2)', [race.id, message.author.id]);
+    await message.reply('Sipped recorded. Thank you!');
+
+    const entrants = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
+    const allSipped = entrants.rows.every(e => alreadySipped.rows.some(s => s.user_id === e.user_id) || e.user_id === message.author.id);
+
+    if (allSipped) {
+      const starter = await db.query('SELECT username FROM entries WHERE race_id = $1 ORDER BY rowid ASC LIMIT 1', [race.id]);
+      const mentions = entrants.rows.map(r => `<@${r.user_id}>`).join(', ');
+      await message.channel.send(`${mentions} The race is full and sipped, ready to run!`);
+    }
+    return;
+  }
+
   // Start race with name
   if (message.content.toLowerCase().startsWith('!start ')) {
     if (!isCommander) return message.reply('Only a Quack Commander can start the race.');
@@ -42,7 +65,7 @@ client.on('messageCreate', async (message) => {
     if (parseInt(res.rows[0].count) > 0) return message.reply('A race with that name is already running in this channel.');
 
     const { rows } = await db.query(
-      'INSERT INTO races (channel_id, name, race_number, total_spots, remaining_spots, closed) VALUES ($1, $2, COALESCE((SELECT MAX(race_number)+1 FROM races WHERE channel_id = $1), 1), $3, $3, false) RETURNING race_number',
+      'INSERT INTO races (channel_id, name, race_number, total_spots, remaining_spots, closed) VALUES ($1, $2, COALESCE((SELECT MAX(race_number)+1 FROM races WHERE channel_id = $1), 1), $3, $3, false) RETURNING race_number, id',
       [channelId, raceName, total]
     );
     return message.channel.send(`Race "${raceName}" (#${rows[0].race_number}) started with ${total} spots! Type X<number> to claim spots.`);
