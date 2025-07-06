@@ -121,7 +121,7 @@ sipped — Mark yourself as sipped once race is full
 
   // !list <name>
   if (content.toLowerCase().startsWith('!list ')) {
-    const raceName = content.split(' ')[1];
+    const raceName = content.split(' ')[1].toLowerCase();
     const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
     if (raceRes.rows.length === 0) return message.reply('Race not found.');
 
