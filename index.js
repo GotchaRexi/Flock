@@ -119,8 +119,15 @@ client.on('messageCreate', async (message) => {
     if (rows.length === 0) return message.reply('There is no active race to list.');
 
     const race = rows[0];
-    const { rows: entryRows } = await db.query('SELECT COUNT(*) FROM entries WHERE race_id = $1', [race.id]);
-    return message.channel.send(`Current entries: ${entryRows[0].count}`);
+    const { rows: entryRows } = await db.query(
+      'SELECT username, COUNT(*) as count FROM entries WHERE race_id = $1 GROUP BY username ORDER BY count DESC',
+      [race.id]
+    );
+
+    if (entryRows.length === 0) return message.channel.send('No entries yet.');
+
+    const formattedList = entryRows.map(r => `${r.username} - ${r.count}`).join('\n');
+    return message.channel.send(`Current entries:\n${formattedList}`);
   }
 
   // Claim spots
