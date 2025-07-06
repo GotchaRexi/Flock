@@ -71,8 +71,8 @@ client.on('messageCreate', async (message) => {
     if (rows.length === 0) return message.reply('There is no active race to list.');
 
     const race = rows[0];
-    const { rowCount } = await db.query('SELECT COUNT(*) FROM entries WHERE race_id = $1', [race.id]);
-    return message.channel.send(`Current entries: ${rowCount}`);
+    const { rows: entryRows } = await db.query('SELECT COUNT(*) FROM entries WHERE race_id = $1', [race.id]);
+    return message.channel.send(`Current entries: ${entryRows[0].count}`);
   }
 
   // Claim spots
