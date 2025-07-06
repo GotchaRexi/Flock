@@ -188,29 +188,25 @@ sipped — Mark yourself as sipped once race is full
     return message.channel.send(`Entries for "${race.name}":\n${entries.rows.map(r => r.username).join('\n')}`);
   }
 
-  // !status <name>
-  if (content.toLowerCase().startsWith('!status ')) {
-    const raceName = content.split(' ')[1].toLowerCase();
-    const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
-    if (raceRes.rows.length === 0) return message.reply('Race not found.');
-
-    const race = raceRes.rows[0];
-    const entries = await db.query('SELECT user_id, username, COUNT(*) AS count FROM entries WHERE race_id = $1 GROUP BY username ORDER BY count DESC', [race.id]);
-
-    let sipStatus = [];
-    if (race.closed) {
-      const sipped = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
-      sipStatus = sipped.rows.map(row => row.user_id);
-    }
-
-    const statusList = entries.rows.map(entry => {
-        const sipped = sipStatus.includes(entry.user_id);
-        return `${entry.username} - ${entry.count}${sipped ? ' - Sipped' : ''}`;
-      }).join('\n');
-
-    return message.channel.send(`Race "${race.name}" Status: ${race.remaining_spots}/${race.total_spots} spots remaining.\n` +
-      (entries.rows.length > 0 ? entries.rows.map(r => `${r.username} - ${r.count}`).join('\n') : 'No entries yet.'));
-  }
+    // Handle !status <name>
+    if (content.toLowerCase().startsWith('!status ')) {
+        const raceName = content.split(' ')[1].toLowerCase();
+        const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
+        if (raceRes.rows.length === 0) return message.reply('Race not found.');
+    
+        const race = raceRes.rows[0];
+        const entries = await db.query('SELECT user_id, username, COUNT(*) AS count FROM entries WHERE race_id = $1 GROUP BY user_id, username ORDER BY count DESC', [race.id]);
+    
+        const sipped = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
+        const sipStatus = sipped.rows.map(row => row.user_id);
+    
+        const statusList = entries.rows.map(entry => {
+          const sipped = sipStatus.includes(entry.user_id);
+          return `${entry.username} - ${entry.count}${sipped ? ' - Sipped' : ''}`;
+        }).join('\n');
+    
+        return message.channel.send(`Race "${race.name}" Status: ${race.remaining_spots}/${race.total_spots} spots remaining.\n${statusList}`);
+      }
 
   // !cancel <name>
   if (content.toLowerCase().startsWith('!cancel ')) {
