@@ -52,7 +52,7 @@ sipped — Mark yourself as sipped once race is full
   const startMatch = content.match(/^!start\s+(\w+)\s+(\d+)$/i);
   if (startMatch) {
     if (!isCommander) return message.reply('Only a Quack Commander can start the race.');
-    const raceName = startMatch[1].toLocaleLowerCase;
+    const raceName = startMatch[1].toLocaleLowerCase();
     const total = parseInt(startMatch[2]);
     if (!raceName || isNaN(total) || total <= 0) return message.reply('Usage: !start <name> <spots>');
 
