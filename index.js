@@ -134,7 +134,7 @@ sipped — Mark yourself as sipped once race is full
 
   // !status <name>
   if (content.toLowerCase().startsWith('!status ')) {
-    const raceName = content.split(' ')[1];
+    const raceName = content.split(' ')[1].toLowerCase();
     const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
     if (raceRes.rows.length === 0) return message.reply('Race not found.');
 
@@ -148,7 +148,7 @@ sipped — Mark yourself as sipped once race is full
   // !cancel <name>
   if (content.startsWith('!cancel ')) {
     if (!isCommander) return;
-    const name = content.split(' ')[1];
+    const name = content.split(' ')[1].toLowerCase();
     await db.query('UPDATE races SET closed = true WHERE channel_id = $1 AND LOWER(name) = $2 AND closed = false', [channelId, name]);
     return message.channel.send(`Race "${name}" has been cancelled.`);
   }
@@ -156,7 +156,7 @@ sipped — Mark yourself as sipped once race is full
   // !reset <name>
   if (content.startsWith('!reset ')) {
     if (!isCommander) return;
-    const name = content.split(' ')[1];
+    const name = content.split(' ')[1].toLowerCase();
     const res = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, name]);
     if (res.rows.length === 0) return;
     const race = res.rows[0];
@@ -168,7 +168,7 @@ sipped — Mark yourself as sipped once race is full
   // !forceclose <name>
   if (content.startsWith('!forceclose ')) {
     if (!isCommander) return;
-    const name = content.split(' ')[1];
+    const name = content.split(' ')[1].toLowerCase();
     const res = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 AND closed = false ORDER BY id DESC LIMIT 1', [channelId, name]);
     if (res.rows.length === 0) return;
     const race = res.rows[0];
