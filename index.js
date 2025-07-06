@@ -114,9 +114,14 @@ client.on('messageCreate', async (message) => {
 
     if (claimCount > race.remaining_spots) return message.reply(`Only ${race.remaining_spots} spots left!`);
 
-    const insertText = 'INSERT INTO entries (race_id, user_id, username) VALUES ' +
-      Array(claimCount).fill(`($1, $2, $3)`).join(', ');
-    const insertParams = Array(claimCount).fill([race.id, message.author.id, message.author.username]).flat();
+    let placeholders = [];
+    let insertParams = [];
+    for (let i = 0; i < claimCount; i++) {
+      const baseIndex = i * 3;
+      placeholders.push(`($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3})`);
+      insertParams.push(race.id, message.author.id, message.author.username);
+    }
+    const insertText = `INSERT INTO entries (race_id, user_id, username) VALUES ${placeholders.join(', ')}`;
     await db.query(insertText, insertParams);
 
     const newRemaining = race.remaining_spots - claimCount;
