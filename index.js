@@ -19,6 +19,8 @@ client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
 
+const pendingWipes = new Map();
+
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
@@ -76,6 +78,27 @@ client.on('messageCreate', async (message) => {
     await db.query('DELETE FROM entries WHERE race_id = $1', [rows[0].id]);
     await db.query('UPDATE races SET remaining_spots = total_spots WHERE id = $1', [rows[0].id]);
     return message.channel.send(`Race "${raceName}" has been reset. All entries cleared.`);
+  }
+
+  // Wipe all races and entries with confirmation
+  if (isCommander && message.content.toLowerCase() === '!wipe') {
+    pendingWipes.set(message.author.id, true);
+    return message.reply('⚠️ This will delete ALL races and entries. Type `!confirmwipe` to proceed.');
+  }
+
+  if (isCommander && message.content.toLowerCase() === '!confirmwipe') {
+    if (!pendingWipes.get(message.author.id)) {
+      return message.reply('No wipe action is pending. Run `!wipe` first.');
+    }
+    pendingWipes.delete(message.author.id);
+    try {
+      await db.query('DELETE FROM entries');
+      await db.query('DELETE FROM races');
+      return message.channel.send('✅ All race and entry data has been wiped from the database.');
+    } catch (err) {
+      console.error('Wipe error:', err);
+      return message.reply('Failed to wipe data. Check logs.');
+    }
   }
 
   // Race status
