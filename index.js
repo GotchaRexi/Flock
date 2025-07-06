@@ -15,8 +15,6 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.Reaction]
 });
 
-const RACE_THRESHOLDS = [75, 50, 25, 10];
-
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
@@ -43,8 +41,9 @@ client.on('messageCreate', async (message) => {
   }
 
   // Claim spots
-  if (/^x\d+$/i.test(message.content.trim())) {
-    const claimCount = parseInt(message.content.slice(1));
+  const match = message.content.trim().match(/^x(\d+)$/i);
+  if (match) {
+    const claimCount = parseInt(match[1]);
     if (isNaN(claimCount) || claimCount <= 0) return;
 
     const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
@@ -61,15 +60,7 @@ client.on('messageCreate', async (message) => {
     const newRemaining = race.remaining_spots - claimCount;
     await db.query('UPDATE races SET remaining_spots = $1 WHERE id = $2', [newRemaining, race.id]);
 
-    const announced = await db.query('SELECT threshold FROM race_thresholds WHERE race_id = $1', [race.id]);
-    const alreadyAnnounced = announced.rows.map(r => r.threshold);
-
-    for (const t of RACE_THRESHOLDS) {
-      if (newRemaining === t && !alreadyAnnounced.includes(t)) {
-        await db.query('INSERT INTO race_thresholds (race_id, threshold) VALUES ($1, $2)', [race.id, t]);
-        await message.channel.send(`${t} spots remaining!`);
-      }
-    }
+    await message.channel.send(`${message.author.username} claimed ${claimCount} spot(s). ${newRemaining} spot(s) remaining.`);
 
     if (newRemaining === 0) {
       await db.query('UPDATE races SET closed = true WHERE id = $1', [race.id]);
