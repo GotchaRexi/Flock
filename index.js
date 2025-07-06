@@ -38,6 +38,25 @@ client.on('messageCreate', async (message) => {
   const isCommander = message.member.roles.cache.some(role => role.name === 'Quack Commander');
   const channelId = message.channel.id;
 
+  // Handle !start <name> <spots>
+  const startMatch = message.content.trim().match(/^!start\s+(\w+)\s+(\d+)$/i);
+  if (startMatch) {
+    if (!isCommander) return message.reply('Only a Quack Commander can start the race.');
+
+    const raceName = startMatch[1];
+    const total = parseInt(startMatch[2]);
+    if (!raceName || isNaN(total) || total <= 0) return message.reply('Usage: !start <name> <spots>');
+
+    const res = await db.query('SELECT COUNT(*) FROM races WHERE channel_id = $1 AND name = $2 AND closed = false', [channelId, raceName]);
+    if (parseInt(res.rows[0].count) > 0) return message.reply('A race with that name is already running in this channel.');
+
+    const { rows } = await db.query(
+      'INSERT INTO races (channel_id, name, race_number, total_spots, remaining_spots, closed) VALUES ($1, $2, COALESCE((SELECT MAX(race_number)+1 FROM races WHERE channel_id = $1), 1), $3, $3, false) RETURNING race_number, id',
+      [channelId, raceName, total]
+    );
+    return message.channel.send(`Race "${raceName}" (#${rows[0].race_number}) started with ${total} spots! Type X<number> to claim spots.`);
+  }
+
   // Handle "sipped"
   if (message.content.toLowerCase().trim() === 'sipped') {
     const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = true ORDER BY id DESC LIMIT 1', [channelId]);
