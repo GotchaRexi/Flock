@@ -30,11 +30,11 @@ client.on('messageCreate', async (message) => {
   const channelId = message.channel.id;
 
   // Start race with name
-  if (isCommander && message.content.toLowerCase().startsWith('start race')) {
+  if (isCommander && message.content.toLowerCase().startsWith('!start race')) {
     const parts = message.content.trim().split(/\s+/);
     const raceName = parts[2];
     const total = parseInt(parts[3]);
-    if (!raceName || isNaN(total) || total <= 0) return message.reply('Usage: start race <name> <spots>');
+    if (!raceName || isNaN(total) || total <= 0) return message.reply('Usage: !start race <name> <spots>');
 
     const res = await db.query('SELECT COUNT(*) FROM races WHERE channel_id = $1 AND name = $2 AND closed = false', [channelId, raceName]);
     if (parseInt(res.rows[0].count) > 0) return message.reply('A race with that name is already running in this channel.');
@@ -47,9 +47,9 @@ client.on('messageCreate', async (message) => {
   }
 
   // Cancel race with name
-  if (isCommander && message.content.toLowerCase().startsWith('cancel ')) {
+  if (isCommander && message.content.toLowerCase().startsWith('!cancel ')) {
     const raceName = message.content.split(/\s+/)[1];
-    if (!raceName) return message.reply('Usage: cancel <raceName>');
+    if (!raceName) return message.reply('Usage: !cancel <raceName>');
 
     const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 AND closed = false ORDER BY id DESC LIMIT 1', [channelId, raceName]);
     if (rows.length === 0) return message.reply(`No active race named "${raceName}" to cancel.`);
