@@ -54,6 +54,13 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
+  // Force close race (even if one doesn't exist cleanly)
+  if (isCommander && message.content.toLowerCase() === '!forceclose') {
+    await db.query('UPDATE races SET closed = true WHERE channel_id = $1 AND closed = false', [channelId]);
+    await message.channel.send(`Force-closed any open races in this channel.`);
+    return;
+  }
+
   // Reset race
   if (isCommander && message.content.toLowerCase() === '!reset') {
     const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
