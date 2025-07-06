@@ -97,7 +97,7 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // Handle list command by race name
+  // Handle !list <raceName> with full entry list
   const listMatch = message.content.trim().match(/^!list\s+(\w+)$/i);
   if (listMatch) {
     const raceName = listMatch[1];
@@ -105,11 +105,26 @@ client.on('messageCreate', async (message) => {
     if (rows.length === 0) return message.reply(`No race named "${raceName}" found in this channel.`);
     const race = rows[0];
 
-    const entries = await db.query('SELECT username, COUNT(*) as count FROM entries WHERE race_id = $1 GROUP BY username ORDER BY count DESC', [race.id]);
+    const entries = await db.query('SELECT username FROM entries WHERE race_id = $1', [race.id]);
     if (entries.rows.length === 0) return message.reply('No one has entered this race yet.');
 
-    const listText = entries.rows.map(e => `${e.username} - ${e.count}`).join('\n');
+    const listText = entries.rows.map(e => e.username).join('\n');
     await message.channel.send(`Entries for race "${race.name}":\n${listText}`);
+    return;
+  }
+
+  // Handle !status <raceName> with summary
+  const statusMatch = message.content.trim().match(/^!status\s+(\w+)$/i);
+  if (statusMatch) {
+    const raceName = statusMatch[1];
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
+    if (rows.length === 0) return message.reply(`No race named "${raceName}" found in this channel.`);
+    const race = rows[0];
+
+    const summary = await db.query('SELECT username, COUNT(*) as count FROM entries WHERE race_id = $1 GROUP BY username ORDER BY count DESC', [race.id]);
+    const summaryText = summary.rows.map(r => `${r.username} - ${r.count}`).join('\n') || 'No entries yet.';
+
+    await message.channel.send(`Race "${race.name}" status: ${race.remaining_spots}/${race.total_spots} spots remaining${race.closed ? ' (closed)' : ''}.\nCurrent entries:\n${summaryText}`);
     return;
   }
 
