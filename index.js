@@ -33,26 +33,27 @@ const pendingWipes = new Map();
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
+  console.log(`Received: ${message.content}`);
+
   const isCommander = message.member.roles.cache.some(role => role.name === 'Quack Commander');
   const channelId = message.channel.id;
-  const content = message.content.trim();
 
-  // Help command
-  if (content === '!help') {
-    return message.channel.send(`**Duck Race Bot Commands:**
-!start <name> <spots> — Start a new race (Quack Commanders only)
-x<number> — Claim spots in the active race
-sipped — Mark yourself as sipped once race is full
-!list <name> — Show all individual entries in a race
-!status <name> — Show current summary of the race
-!cancel <name> — Cancel an active race (Quack Commanders only)
-!reset <name> — Clear all entries from a race (Quack Commanders only)
-!forceclose <name> — Force a race to close early (Quack Commanders only)
-!wipe — Clears all race data (Quack Commanders only, requires confirmation)`);
+    // Help command
+    if (content === '!help') {
+        return message.channel.send(`**Duck Race Bot Commands:**
+        !start <name> <spots> — Start a new race (Quack Commanders only)
+        x<number> — Claim spots in the active race
+        sipped — Mark yourself as sipped once race is full
+        !list <name> — Show all individual entries in a race
+        !status <name> — Show current summary of the race
+        !cancel <name> — Cancel an active race (Quack Commanders only)
+        !reset <name> — Clear all entries from a race (Quack Commanders only)
+        !forceclose <name> — Force a race to close early (Quack Commanders only)
+        !wipe — Clears all race data (Quack Commanders only, requires confirmation)`);
   }
 
   // Handle !start <name> <spots>
-  const startMatch = content.match(/^!start\s+(\w+)\s+(\d+)$/i);
+  const startMatch = message.content.trim().match(/^!start\s+(\w+)\s+(\d+)$/i);
   if (startMatch) {
     if (!isCommander) return message.reply('Only a Quack Commander can start the race.');
 
@@ -71,7 +72,7 @@ sipped — Mark yourself as sipped once race is full
   }
 
   // Handle "sipped"
-  if (content.toLowerCase() === 'sipped') {
+  if (message.content.toLowerCase().trim() === 'sipped') {
     const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = true ORDER BY id DESC LIMIT 1', [channelId]);
     if (rows.length === 0) return;
 
@@ -87,12 +88,79 @@ sipped — Mark yourself as sipped once race is full
     const allSipped = entrants.rows.every(e => allSips.rows.some(s => s.user_id === e.user_id));
 
     if (allSipped) {
-      await message.channel.send(`@here The race is full, sipped, and ready to run!`);
+        await message.channel.send(`@here The race is full, sipped, and ready to run!`);
     }
     return;
   }
 
-  // Add other command handling here (existing logic)
+  // Handle spot claims
+  const match = message.content.trim().match(/^x(\d+)$/i);
+  if (match) {
+    const claimCount = parseInt(match[1]);
+    if (isNaN(claimCount) || claimCount <= 0) return;
+
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
+    if (rows.length === 0) return;
+    const race = rows[0];
+
+    if (claimCount > race.remaining_spots) return message.reply(`Only ${race.remaining_spots} spots left!`);
+
+    let placeholders = [];
+    let insertParams = [];
+    for (let i = 0; i < claimCount; i++) {
+      const baseIndex = i * 3;
+      placeholders.push(`($${baseIndex + 1}, $${baseIndex + 2}, $${baseIndex + 3})`);
+      insertParams.push(race.id, message.author.id, message.member.displayName);
+    }
+    const insertText = `INSERT INTO entries (race_id, user_id, username) VALUES ${placeholders.join(', ')}`;
+    await db.query(insertText, insertParams);
+
+    const newRemaining = race.remaining_spots - claimCount;
+    await db.query('UPDATE races SET remaining_spots = $1 WHERE id = $2', [newRemaining, race.id]);
+
+    await message.channel.send(`${message.member.displayName} claimed ${claimCount} spot(s). ${newRemaining} spot(s) remaining in race "${race.name}".`);
+
+    if (newRemaining === 0) {
+      await db.query('UPDATE races SET closed = true WHERE id = $1', [race.id]);
+      const finalEntries = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
+      const mentions = finalEntries.rows.map(r => `<@${r.user_id}>`).join(', ');
+      await message.channel.send(`The race is now full! ${mentions} please sip when available.`);
+    }
+    return;
+  }
+
+  // Handle !list <raceName> with full entry list
+  const listMatch = message.content.trim().match(/^!list\s+(\w+)$/i);
+  if (listMatch) {
+    const raceName = listMatch[1];
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
+    if (rows.length === 0) return message.reply(`No race named "${raceName}" found in this channel.`);
+    const race = rows[0];
+
+    const entries = await db.query('SELECT username FROM entries WHERE race_id = $1', [race.id]);
+    if (entries.rows.length === 0) return message.reply('No one has entered this race yet.');
+
+    const listText = entries.rows.map(e => e.username).join('\n');
+    await message.channel.send(`Entries for race "${race.name}":\n${listText}`);
+    return;
+  }
+
+  // Handle !status <raceName> with summary
+  const statusMatch = message.content.trim().match(/^!status\s+(\w+)$/i);
+  if (statusMatch) {
+    const raceName = statusMatch[1];
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
+    if (rows.length === 0) return message.reply(`No race named "${raceName}" found in this channel.`);
+    const race = rows[0];
+
+    const summary = await db.query('SELECT username, COUNT(*) as count FROM entries WHERE race_id = $1 GROUP BY username ORDER BY count DESC', [race.id]);
+    const summaryText = summary.rows.map(r => `${r.username} - ${r.count}`).join('\n') || 'No entries yet.';
+
+    await message.channel.send(`Race "${race.name}" status: ${race.remaining_spots}/${race.total_spots} spots remaining${race.closed ? ' (closed)' : ''}.\nCurrent entries:\n${summaryText}`);
+    return;
+  }
+
+  // Add other command handling here
 });
 
 client.login(process.env.BOT_TOKEN);
