@@ -68,6 +68,60 @@ sipped — Mark yourself as sipped once race is full
 
 
     // Handle x<number> and x<number> for @user
+  /*const claimMatch = content.match(/^x(\d+)(?:\s+for\s+<@!?(\d+)>)*$/i);
+  if (claimMatch) {
+    const claimCount = parseInt(claimMatch[1]);
+    const targetId = claimMatch[2] || message.author.id;
+    const targetName = claimMatch[2] ? (message.mentions.members.first()?.displayName || 'Unknown') : message.member.displayName;
+
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
+    if (rows.length === 0) return;
+
+    const race = rows[0];
+    if (claimCount > race.remaining_spots) return message.reply(`Only ${race.remaining_spots} spots left!`);
+
+    const entries = [];
+    for (let i = 0; i < claimCount; i++) {
+      entries.push(`(${race.id}, '${targetId}', '${targetName.replace(/'/g, "''")}')`);
+    }
+    await db.query(`INSERT INTO entries (race_id, user_id, username) VALUES ${entries.join(', ')}`);
+    const newRemaining = race.remaining_spots - claimCount;
+    await db.query('UPDATE races SET remaining_spots = $1 WHERE id = $2', [newRemaining, race.id]);
+
+    await message.channel.send(`${targetName} claimed ${claimCount} spot(s). ${newRemaining} spot(s) remaining in race "${race.name}".`);
+
+    if (newRemaining === 0) {
+      await db.query('UPDATE races SET closed = true WHERE id = $1', [race.id]);
+      const finalEntries = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
+      const mentions = finalEntries.rows.map(r => `<@${r.user_id}>`).join(', ');
+      await message.channel.send(`The race is now full! ${mentions} please sip when available.`);
+    }
+    return;
+  }*/
+
+    // Handle x<number> or x<number> for @user or x close
+  const xCloseMatch = content.match(/^x\s*close$/i);
+  if (xCloseMatch) {
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
+    if (rows.length === 0) return;
+    const race = rows[0];
+    const targetId = message.author.id;
+    const targetName = message.member.displayName;
+    const claimCount = race.remaining_spots;
+
+    if (claimCount <= 0) return message.reply('There are no remaining spots to claim.');
+
+    const entries = [];
+    for (let i = 0; i < claimCount; i++) {
+      entries.push(`(${race.id}, '${targetId}', '${targetName.replace(/'/g, "''")}')`);
+    }
+    await db.query(`INSERT INTO entries (race_id, user_id, username) VALUES ${entries.join(', ')}`);
+    await db.query('UPDATE races SET remaining_spots = 0, closed = true WHERE id = $1', [race.id]);
+
+    await message.channel.send(`${targetName} claimed the final ${claimCount} spot(s). The race is now full! <@${targetId}> please sip when available.`);
+    return;
+  }
+
   const claimMatch = content.match(/^x(\d+)(?:\s+for\s+<@!?(\d+)>)*$/i);
   if (claimMatch) {
     const claimCount = parseInt(claimMatch[1]);
@@ -146,10 +200,11 @@ sipped — Mark yourself as sipped once race is full
   }
 
   // !cancel <name>
-  if (content.startsWith('!cancel ')) {
+  if (content.toLowerCase().startsWith('!cancel ')) {
     if (!isCommander) return;
     const name = content.split(' ')[1].toLowerCase();
-    await db.query('UPDATE races SET closed = true WHERE channel_id = $1 AND LOWER(name) = $2 AND closed = false', [channelId, name]);
+    const { rowCount } = await db.query('UPDATE races SET closed = true WHERE channel_id = $1 AND LOWER(name) = $2 AND closed = false', [channelId, name]);
+    if (rowCount === 0) return message.reply(`Could not find an active race named "${name}" in this channel.`);
     return message.channel.send(`Race "${name}" has been cancelled.`);
   }
 
