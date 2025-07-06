@@ -40,6 +40,18 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`Race #${rows[0].race_number} started with ${total} spots! Type X<number> to claim spots.`);
   }
 
+  // Cancel race
+  if (isCommander && message.content.toLowerCase() === 'cancel race') {
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
+    if (rows.length === 0) {
+      return message.reply('There is no active race to cancel in this channel.');
+    }
+
+    await db.query('UPDATE races SET closed = true WHERE id = $1', [rows[0].id]);
+    await message.channel.send(`Race #${rows[0].race_number} has been cancelled.`);
+    return;
+  }
+
   // Claim spots
   const match = message.content.trim().match(/^x(\d+)$/i);
   if (match) {
