@@ -52,11 +52,11 @@ sipped — Mark yourself as sipped once race is full
   const startMatch = content.match(/^!start\s+(\w+)\s+(\d+)$/i);
   if (startMatch) {
     if (!isCommander) return message.reply('Only a Quack Commander can start the race.');
-    const raceName = startMatch[1];
+    const raceName = startMatch[1].toLocaleLowerCase;
     const total = parseInt(startMatch[2]);
     if (!raceName || isNaN(total) || total <= 0) return message.reply('Usage: !start <name> <spots>');
 
-    const res = await db.query('SELECT COUNT(*) FROM races WHERE channel_id = $1 AND name = $2 AND closed = false', [channelId, raceName]);
+    const res = await db.query('SELECT COUNT(*) FROM races WHERE channel_id = $1 AND LOWER(name) = $2 AND closed = false', [channelId, raceName]);
     if (parseInt(res.rows[0].count) > 0) return message.reply('A race with that name is already running in this channel.');
 
     const { rows } = await db.query(
@@ -66,36 +66,6 @@ sipped — Mark yourself as sipped once race is full
     return message.channel.send(`Race "${raceName}" (#${rows[0].race_number}) started with ${total} spots! Type X<number> to claim spots.`);
   }
 
-  // x<number>
- /* const match = content.match(/^x(\d+)$/i);
-  if (match) {
-    const claimCount = parseInt(match[1]);
-    if (isNaN(claimCount) || claimCount <= 0) return;
-
-    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
-    if (rows.length === 0) return;
-    const race = rows[0];
-
-    if (claimCount > race.remaining_spots) return message.reply(`Only ${race.remaining_spots} spots left!`);
-
-    let placeholders = [], values = [];
-    for (let i = 0; i < claimCount; i++) {
-      placeholders.push(`($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3})`);
-      values.push(race.id, message.author.id, message.member.displayName);
-    }
-    await db.query(`INSERT INTO entries (race_id, user_id, username) VALUES ${placeholders.join(', ')}`, values);
-    const newRemaining = race.remaining_spots - claimCount;
-    await db.query('UPDATE races SET remaining_spots = $1 WHERE id = $2', [newRemaining, race.id]);
-
-    await message.channel.send(`${message.member.displayName} claimed ${claimCount} spot(s). ${newRemaining} spot(s) remaining in race "${race.name}".`);
-
-    if (newRemaining === 0) {
-      await db.query('UPDATE races SET closed = true WHERE id = $1', [race.id]);
-      const finalEntries = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
-      await message.channel.send(`The race is now full! ${finalEntries.rows.map(r => `<@${r.user_id}>`).join(', ')} please sip when available.`);
-    }
-    return;
-  } */
 
     // Handle x<number> and x<number> for @user
   const claimMatch = content.match(/^x(\d+)(?:\s+for\s+<@!?(\d+)>)*$/i);
@@ -152,7 +122,7 @@ sipped — Mark yourself as sipped once race is full
   // !list <name>
   if (content.toLowerCase().startsWith('!list ')) {
     const raceName = content.split(' ')[1];
-    const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
+    const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
     if (raceRes.rows.length === 0) return message.reply('Race not found.');
 
     const race = raceRes.rows[0];
@@ -165,7 +135,7 @@ sipped — Mark yourself as sipped once race is full
   // !status <name>
   if (content.toLowerCase().startsWith('!status ')) {
     const raceName = content.split(' ')[1];
-    const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
+    const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
     if (raceRes.rows.length === 0) return message.reply('Race not found.');
 
     const race = raceRes.rows[0];
@@ -179,7 +149,7 @@ sipped — Mark yourself as sipped once race is full
   if (content.startsWith('!cancel ')) {
     if (!isCommander) return;
     const name = content.split(' ')[1];
-    await db.query('UPDATE races SET closed = true WHERE channel_id = $1 AND name = $2 AND closed = false', [channelId, name]);
+    await db.query('UPDATE races SET closed = true WHERE channel_id = $1 AND LOWER(name) = $2 AND closed = false', [channelId, name]);
     return message.channel.send(`Race "${name}" has been cancelled.`);
   }
 
@@ -187,7 +157,7 @@ sipped — Mark yourself as sipped once race is full
   if (content.startsWith('!reset ')) {
     if (!isCommander) return;
     const name = content.split(' ')[1];
-    const res = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 ORDER BY id DESC LIMIT 1', [channelId, name]);
+    const res = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, name]);
     if (res.rows.length === 0) return;
     const race = res.rows[0];
     await db.query('DELETE FROM entries WHERE race_id = $1', [race.id]);
@@ -199,7 +169,7 @@ sipped — Mark yourself as sipped once race is full
   if (content.startsWith('!forceclose ')) {
     if (!isCommander) return;
     const name = content.split(' ')[1];
-    const res = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 AND closed = false ORDER BY id DESC LIMIT 1', [channelId, name]);
+    const res = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 AND closed = false ORDER BY id DESC LIMIT 1', [channelId, name]);
     if (res.rows.length === 0) return;
     const race = res.rows[0];
     await db.query('UPDATE races SET closed = true, remaining_spots = 0 WHERE id = $1', [race.id]);
