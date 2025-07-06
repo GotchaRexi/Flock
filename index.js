@@ -118,7 +118,9 @@ sipped — Mark yourself as sipped once race is full
     await db.query(`INSERT INTO entries (race_id, user_id, username) VALUES ${entries.join(', ')}`);
     await db.query('UPDATE races SET remaining_spots = 0, closed = true WHERE id = $1', [race.id]);
 
-    await message.channel.send(`${targetName} claimed the final ${claimCount} spot(s). The race is now full! <@${targetId}> please sip when available.`);
+    const finalEntries = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
+    const mentions = finalEntries.rows.map(r => `<@${r.user_id}>`).join(', ');
+    await message.channel.send(`${targetName} claimed the final ${claimCount} spot(s). The race is now full! ${mentions} please sip when available.`);
     return;
   }
 
@@ -193,7 +195,18 @@ sipped — Mark yourself as sipped once race is full
     if (raceRes.rows.length === 0) return message.reply('Race not found.');
 
     const race = raceRes.rows[0];
-    const entries = await db.query('SELECT username, COUNT(*) AS count FROM entries WHERE race_id = $1 GROUP BY username ORDER BY count DESC', [race.id]);
+    const entries = await db.query('SELECT user_id, username, COUNT(*) AS count FROM entries WHERE race_id = $1 GROUP BY username ORDER BY count DESC', [race.id]);
+
+    let sipStatus = [];
+    if (race.closed) {
+      const sipped = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
+      sipStatus = sipped.rows.map(row => row.user_id);
+    }
+
+    const statusList = entries.rows.map(entry => {
+        const sipped = sipStatus.includes(entry.user_id);
+        return `${entry.username} - ${entry.count}${sipped ? ' - Sipped' : ''}`;
+      }).join('\n');
 
     return message.channel.send(`Race "${race.name}" Status: ${race.remaining_spots}/${race.total_spots} spots remaining.\n` +
       (entries.rows.length > 0 ? entries.rows.map(r => `${r.username} - ${r.count}`).join('\n') : 'No entries yet.'));
