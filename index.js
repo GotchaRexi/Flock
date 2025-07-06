@@ -141,7 +141,7 @@ client.on('messageCreate', async (message) => {
     const newRemaining = race.remaining_spots - claimCount;
     await db.query('UPDATE races SET remaining_spots = $1 WHERE id = $2', [newRemaining, race.id]);
 
-    await message.channel.send(`${message.member.displayName} claimed ${claimCount} spot(s). ${newRemaining} spot(s) remaining.`);
+    await message.channel.send(`${message.member.displayName} claimed ${claimCount} spot(s). ${newRemaining} spot(s) remaining in race "${race.name}".`);
 
     if (newRemaining === 0) {
       await db.query('UPDATE races SET closed = true WHERE id = $1', [race.id]);
