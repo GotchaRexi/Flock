@@ -30,11 +30,13 @@ client.on('messageCreate', async (message) => {
   const channelId = message.channel.id;
 
   // Start race with name
-  if (isCommander && message.content.toLowerCase().startsWith('!start race')) {
+  if (message.content.toLowerCase().startsWith('!start ')) {
+    if (!isCommander) return message.reply('Only a Quack Commander can start the race.');
+
     const parts = message.content.trim().split(/\s+/);
-    const raceName = parts[2];
-    const total = parseInt(parts[3]);
-    if (!raceName || isNaN(total) || total <= 0) return message.reply('Usage: !start race <name> <spots>');
+    const raceName = parts[1];
+    const total = parseInt(parts[2]);
+    if (!raceName || isNaN(total) || total <= 0) return message.reply('Usage: !start <name> <spots>');
 
     const res = await db.query('SELECT COUNT(*) FROM races WHERE channel_id = $1 AND name = $2 AND closed = false', [channelId, raceName]);
     if (parseInt(res.rows[0].count) > 0) return message.reply('A race with that name is already running in this channel.');
