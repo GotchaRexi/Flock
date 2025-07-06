@@ -48,62 +48,7 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`Race "${raceName}" (#${rows[0].race_number}) started with ${total} spots! Type X<number> to claim spots.`);
   }
 
-  // Cancel race with name
-  if (isCommander && message.content.toLowerCase().startsWith('!cancel ')) {
-    const raceName = message.content.split(/\s+/)[1];
-    if (!raceName) return message.reply('Usage: !cancel <raceName>');
-
-    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 AND closed = false ORDER BY id DESC LIMIT 1', [channelId, raceName]);
-    if (rows.length === 0) return message.reply(`No active race named "${raceName}" to cancel.`);
-
-    await db.query('UPDATE races SET closed = true WHERE id = $1', [rows[0].id]);
-    return message.channel.send(`Race "${raceName}" has been cancelled.`);
-  }
-
-  // Force close race with name
-  if (isCommander && message.content.toLowerCase().startsWith('!forceclose ')) {
-    const raceName = message.content.split(/\s+/)[1];
-    if (!raceName) return message.reply('Usage: !forceclose <raceName>');
-
-    await db.query('UPDATE races SET closed = true WHERE channel_id = $1 AND name = $2 AND closed = false', [channelId, raceName]);
-    return message.channel.send(`Force-closed any open races named "${raceName}" in this channel.`);
-  }
-
-  // Reset race with name
-  if (isCommander && message.content.toLowerCase().startsWith('!reset ')) {
-    const raceName = message.content.split(/\s+/)[1];
-    if (!raceName) return message.reply('Usage: !reset <raceName>');
-
-    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 AND closed = false ORDER BY id DESC LIMIT 1', [channelId, raceName]);
-    if (rows.length === 0) return message.reply(`No active race named "${raceName}" to reset.`);
-
-    await db.query('DELETE FROM entries WHERE race_id = $1', [rows[0].id]);
-    await db.query('UPDATE races SET remaining_spots = total_spots WHERE id = $1', [rows[0].id]);
-    return message.channel.send(`Race "${raceName}" has been reset. All entries cleared.`);
-  }
-
-  // Wipe all races and entries with confirmation
-  if (isCommander && message.content.toLowerCase() === '!wipe') {
-    pendingWipes.set(message.author.id, true);
-    return message.reply('⚠️ This will delete ALL races and entries. Type `!confirmwipe` to proceed.');
-  }
-
-  if (isCommander && message.content.toLowerCase() === '!confirmwipe') {
-    if (!pendingWipes.get(message.author.id)) {
-      return message.reply('No wipe action is pending. Run `!wipe` first.');
-    }
-    pendingWipes.delete(message.author.id);
-    try {
-      await db.query('DELETE FROM entries');
-      await db.query('DELETE FROM races');
-      return message.channel.send('✅ All race and entry data has been wiped from the database.');
-    } catch (err) {
-      console.error('Wipe error:', err);
-      return message.reply('Failed to wipe data. Check logs.');
-    }
-  }
-
-  // Race status
+  // Status command with summarized list
   if (message.content.toLowerCase().startsWith('!status ')) {
     const raceName = message.content.split(/\s+/)[1];
     if (!raceName) return message.reply('Usage: !status <raceName>');
@@ -112,23 +57,29 @@ client.on('messageCreate', async (message) => {
     if (rows.length === 0) return message.reply(`No race found with name "${raceName}" in this channel.`);
 
     const race = rows[0];
-    return message.channel.send(`Race "${race.name}" status: ${race.remaining_spots}/${race.total_spots} spots remaining${race.closed ? ' (closed)' : ''}.`);
+    const { rows: entryRows } = await db.query(
+      'SELECT username, COUNT(*) as count FROM entries WHERE race_id = $1 GROUP BY username ORDER BY count DESC',
+      [race.id]
+    );
+
+    const summaryList = entryRows.length > 0 ? entryRows.map(r => `${r.username} - ${r.count}`).join('\n') : 'No entries yet.';
+    return message.channel.send(`Race "${race.name}" status: ${race.remaining_spots}/${race.total_spots} spots remaining${race.closed ? ' (closed)' : ''}.\nCurrent entries:\n${summaryList}`);
   }
 
-  // List entries
+  // List entries with full list per entry
   if (message.content.toLowerCase() === '!list') {
     const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
     if (rows.length === 0) return message.reply('There is no active race to list.');
 
     const race = rows[0];
     const { rows: entryRows } = await db.query(
-      'SELECT username, COUNT(*) as count FROM entries WHERE race_id = $1 GROUP BY username ORDER BY count DESC',
+      'SELECT username FROM entries WHERE race_id = $1',
       [race.id]
     );
 
     if (entryRows.length === 0) return message.channel.send('No entries yet.');
 
-    const formattedList = entryRows.map(r => `${r.username} - ${r.count}`).join('\n');
+    const formattedList = entryRows.map(r => r.username).join('\n');
     return message.channel.send(`Current entries:\n${formattedList}`);
   }
 
@@ -163,9 +114,9 @@ client.on('messageCreate', async (message) => {
 
     if (newRemaining === 0) {
       await db.query('UPDATE races SET closed = true WHERE id = $1', [race.id]);
-      const finalEntries = await db.query('SELECT username FROM entries WHERE race_id = $1', [race.id]);
-      const list = finalEntries.rows.map(r => r.username).join('\n');
-      await message.channel.send(`Race is full! Final list:\n${list}`);
+      const finalEntries = await db.query('SELECT user_id FROM entries WHERE race_id = $1', [race.id]);
+      const mentions = finalEntries.rows.map(r => `<@${r.user_id}>`).join(', ');
+      await message.channel.send(`The race is now full! ${mentions} please sip when available.`);
     }
   }
 });
