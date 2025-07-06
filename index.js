@@ -44,14 +44,35 @@ client.on('messageCreate', async (message) => {
 
   // Cancel race
   if (isCommander && message.content.toLowerCase() === 'cancel race') {
-    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
-    if (rows.length === 0) {
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1', [channelId]);
+    if (rows.length === 0 || rows[0].closed) {
       return message.reply('There is no active race to cancel in this channel.');
     }
 
     await db.query('UPDATE races SET closed = true WHERE id = $1', [rows[0].id]);
     await message.channel.send(`Race #${rows[0].race_number} has been cancelled.`);
     return;
+  }
+
+  // Reset race
+  if (isCommander && message.content.toLowerCase() === '!reset') {
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
+    if (rows.length === 0) return message.reply('There is no active race to reset.');
+
+    await db.query('DELETE FROM entries WHERE race_id = $1', [rows[0].id]);
+    await db.query('UPDATE races SET remaining_spots = total_spots WHERE id = $1', [rows[0].id]);
+    await message.channel.send(`Race #${rows[0].race_number} has been reset. All entries cleared.`);
+    return;
+  }
+
+  // List entries
+  if (message.content.toLowerCase() === '!list') {
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
+    if (rows.length === 0) return message.reply('There is no active race to list.');
+
+    const race = rows[0];
+    const { rowCount } = await db.query('SELECT COUNT(*) FROM entries WHERE race_id = $1', [race.id]);
+    return message.channel.send(`Current entries: ${rowCount}`);
   }
 
   // Claim spots
@@ -68,15 +89,10 @@ client.on('messageCreate', async (message) => {
 
     if (claimCount > race.remaining_spots) return message.reply(`Only ${race.remaining_spots} spots left!`);
 
-    const values = [];
-    const placeholders = [];
-    for (let i = 0; i < claimCount; i++) {
-      const idx = i * 3;
-      placeholders.push(`($${idx + 1}, $${idx + 2}, $${idx + 3})`);
-      values.push(race.id, message.author.id, message.author.username);
-    }
-
-    await db.query(`INSERT INTO entries (race_id, user_id, username) VALUES ${placeholders.join(', ')}`, values);
+    const insertText = 'INSERT INTO entries (race_id, user_id, username) VALUES ' +
+      Array(claimCount).fill(`($1, $2, $3)`).join(', ');
+    const insertParams = Array(claimCount).fill([race.id, message.author.id, message.author.username]).flat();
+    await db.query(insertText, insertParams);
 
     const newRemaining = race.remaining_spots - claimCount;
     await db.query('UPDATE races SET remaining_spots = $1 WHERE id = $2', [newRemaining, race.id]);
