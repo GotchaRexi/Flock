@@ -33,7 +33,7 @@ const pendingWipes = new Map();
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
-  console.log(`Received: ${message.content}`); // Debug logging
+  console.log(`Received: ${message.content}`);
 
   const isCommander = message.member.roles.cache.some(role => role.name === 'Quack Commander');
   const channelId = message.channel.id;
@@ -48,10 +48,11 @@ client.on('messageCreate', async (message) => {
     if (alreadySipped.rows.length > 0) return message.reply('You already sipped this race.');
 
     await db.query('INSERT INTO sips (race_id, user_id) VALUES ($1, $2)', [race.id, message.author.id]);
-    await message.reply('Sip recorded. Thank you!');
+    await message.reply('Sip recorded.');
 
     const entrants = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
-    const allSipped = entrants.rows.every(e => alreadySipped.rows.some(s => s.user_id === e.user_id) || e.user_id === message.author.id);
+    const allSips = await db.query('SELECT DISTINCT user_id FROM sips WHERE race_id = $1', [race.id]);
+    const allSipped = entrants.rows.every(e => allSips.rows.some(s => s.user_id === e.user_id));
 
     if (allSipped) {
       const mentions = entrants.rows.map(r => `<@${r.user_id}>`).join(', ');
@@ -60,64 +61,8 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // Start race with name
-  if (message.content.toLowerCase().startsWith('!start ')) {
-    if (!isCommander) return message.reply('Only a Quack Commander can start the race.');
-
-    const parts = message.content.trim().split(/\s+/);
-    const raceName = parts[1];
-    const total = parseInt(parts[2]);
-    if (!raceName || isNaN(total) || total <= 0) return message.reply('Usage: !start <name> <spots>');
-
-    const res = await db.query('SELECT COUNT(*) FROM races WHERE channel_id = $1 AND name = $2 AND closed = false', [channelId, raceName]);
-    if (parseInt(res.rows[0].count) > 0) return message.reply('A race with that name is already running in this channel.');
-
-    const { rows } = await db.query(
-      'INSERT INTO races (channel_id, name, race_number, total_spots, remaining_spots, closed) VALUES ($1, $2, COALESCE((SELECT MAX(race_number)+1 FROM races WHERE channel_id = $1), 1), $3, $3, false) RETURNING race_number, id',
-      [channelId, raceName, total]
-    );
-    return message.channel.send(`Race "${raceName}" (#${rows[0].race_number}) started with ${total} spots! Type X<number> to claim spots.`);
-  }
-
-  // Status command with summarized list
-  if (message.content.toLowerCase().startsWith('!status ')) {
-    const raceName = message.content.split(/\s+/)[1];
-    if (!raceName) return message.reply('Usage: !status <raceName>');
-
-    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
-    if (rows.length === 0) return message.reply(`No race found with name "${raceName}" in this channel.`);
-
-    const race = rows[0];
-    const { rows: entryRows } = await db.query(
-      'SELECT username, COUNT(*) as count FROM entries WHERE race_id = $1 GROUP BY username ORDER BY count DESC',
-      [race.id]
-    );
-
-    const summaryList = entryRows.length > 0 ? entryRows.map(r => `${r.username} - ${r.count}`).join('\n') : 'No entries yet.';
-    return message.channel.send(`Race "${race.name}" status: ${race.remaining_spots}/${race.total_spots} spots remaining${race.closed ? ' (closed)' : ''}.\nCurrent entries:\n${summaryList}`);
-  }
-
-  // List entries with full list per entry
-  if (message.content.toLowerCase() === '!list') {
-    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
-    if (rows.length === 0) return message.reply('There is no active race to list.');
-
-    const race = rows[0];
-    const { rows: entryRows } = await db.query(
-      'SELECT username FROM entries WHERE race_id = $1',
-      [race.id]
-    );
-
-    if (entryRows.length === 0) return message.channel.send('No entries yet.');
-
-    const formattedList = entryRows.map(r => r.username).join('\n');
-    return message.channel.send(`Current entries:\n${formattedList}`);
-  }
-
-  // Claim spots
+  // Handle spot claims
   const match = message.content.trim().match(/^x(\d+)$/i);
-  console.log(`Regex match result:`, match); // Debug logging
-
   if (match) {
     const claimCount = parseInt(match[1]);
     if (isNaN(claimCount) || claimCount <= 0) return;
@@ -149,7 +94,26 @@ client.on('messageCreate', async (message) => {
       const mentions = finalEntries.rows.map(r => `<@${r.user_id}>`).join(', ');
       await message.channel.send(`The race is now full! ${mentions} please sip when available.`);
     }
+    return;
   }
+
+  // Handle list command by race name
+  const listMatch = message.content.trim().match(/^!list\s+(\w+)$/i);
+  if (listMatch) {
+    const raceName = listMatch[1];
+    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
+    if (rows.length === 0) return message.reply(`No race named "${raceName}" found in this channel.`);
+    const race = rows[0];
+
+    const entries = await db.query('SELECT username, COUNT(*) as count FROM entries WHERE race_id = $1 GROUP BY username ORDER BY count DESC', [race.id]);
+    if (entries.rows.length === 0) return message.reply('No one has entered this race yet.');
+
+    const listText = entries.rows.map(e => `${e.username} - ${e.count}`).join('\n');
+    await message.channel.send(`Entries for race "${race.name}":\n${listText}`);
+    return;
+  }
+
+  // Add other command handling here
 });
 
 client.login(process.env.BOT_TOKEN);
