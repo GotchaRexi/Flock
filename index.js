@@ -133,7 +133,7 @@ sipped — Mark yourself as sipped once race is full
   }
 
       // Handle "sipped" (now allowed even if race isn't full yet)
-    if (['sipped', 'sip'].includes(content.toLowerCase())) {
+    /*if (['sipped', 'sip'].includes(content.toLowerCase())) {
     const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1', [channelId]);
     if (rows.length === 0) return;
 
@@ -154,7 +154,39 @@ sipped — Mark yourself as sipped once race is full
       }
     }
     return;
+  }*/
+
+      // Handle "sipped" (now allowed even if race isn't full yet)
+    if (['sipped', 'sip'].includes(content.toLowerCase())) {
+  const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1', [channelId]);
+  if (rows.length === 0) return;
+
+  const race = rows[0];
+
+  // Ensure user has entries in this race
+  const entryCheck = await db.query('SELECT COUNT(*) FROM entries WHERE race_id = $1 AND user_id = $2', [race.id, message.author.id]);
+  if (parseInt(entryCheck.rows[0].count) === 0) {
+    return message.reply('You cannot sip because you have not claimed any spots in this race.');
   }
+
+  const alreadySipped = await db.query('SELECT * FROM sips WHERE race_id = $1 AND user_id = $2', [race.id, message.author.id]);
+  if (alreadySipped.rows.length > 0) return message.reply('You already sipped this race.');
+
+  await db.query('INSERT INTO sips (race_id, user_id) VALUES ($1, $2)', [race.id, message.author.id]);
+  await message.reply('Sip recorded.');
+
+  if (race.closed) {
+    const entrants = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
+    const allSips = await db.query('SELECT DISTINCT user_id FROM sips WHERE race_id = $1', [race.id]);
+    const allSipped = entrants.rows.every(e => allSips.rows.some(s => s.user_id === e.user_id));
+
+    if (allSipped) {
+      await message.channel.send(`@here The race is full, sipped, and ready to run!`);
+    }
+  }
+  return;
+}
+
 
   // !list <name>
   if (content.toLowerCase().startsWith('!list ')) {
