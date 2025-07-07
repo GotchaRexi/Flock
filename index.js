@@ -86,10 +86,6 @@ sipped — Mark yourself as sipped once race is full
     await db.query(`INSERT INTO entries (race_id, user_id, username) VALUES ${entries.join(', ')}`);
     await db.query('UPDATE races SET remaining_spots = 0, closed = true WHERE id = $1', [race.id]);
 
-   /* const finalEntries = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
-    const mentions = finalEntries.rows.map(r => `<@${r.user_id}>`).join(', ');
-    await message.channel.send(`${targetName} claimed the final ${claimCount} spot(s). The race is now full! ${mentions} please sip when available.`);
-    */
 
     const finalEntries = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
     const alreadySipped = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
@@ -136,28 +132,8 @@ sipped — Mark yourself as sipped once race is full
     return;
   }
 
-  // sipped
-  /* if (content.toLowerCase() === 'sipped') {
-    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = true ORDER BY id DESC LIMIT 1', [channelId]);
-    if (rows.length === 0) return;
-
-    const race = rows[0];
-    const existing = await db.query('SELECT * FROM sips WHERE race_id = $1 AND user_id = $2', [race.id, message.author.id]);
-    if (existing.rows.length > 0) return message.reply('You already sipped this race.');
-
-    await db.query('INSERT INTO sips (race_id, user_id) VALUES ($1, $2)', [race.id, message.author.id]);
-    await message.reply('Sip recorded.');
-
-    const entrants = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
-    const sippers = await db.query('SELECT DISTINCT user_id FROM sips WHERE race_id = $1', [race.id]);
-
-    const allSipped = entrants.rows.every(e => sippers.rows.some(s => s.user_id === e.user_id));
-    if (allSipped) await message.channel.send(`@here The race is full, sipped, and ready to run!`);
-    return;
-  } */
-
       // Handle "sipped" (now allowed even if race isn't full yet)
-  if (content.toLowerCase() === 'sipped') {
+  if (content.toLowerCase() === 'sipped' or 'sip') {
     const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1', [channelId]);
     if (rows.length === 0) return;
 
@@ -215,7 +191,7 @@ sipped — Mark yourself as sipped once race is full
 
   // !cancel <name>
   if (content.toLowerCase().startsWith('!cancel ')) {
-    if (!isCommander) return;
+    if (!isCommander) return message.reply('Only a Quack Commander can cancel the race.');
     const name = content.split(' ')[1].toLowerCase();
     const { rowCount } = await db.query('UPDATE races SET closed = true WHERE channel_id = $1 AND LOWER(name) = $2 AND closed = false', [channelId, name]);
     if (rowCount === 0) return message.reply(`Could not find an active race named "${name}" in this channel.`);
@@ -224,7 +200,7 @@ sipped — Mark yourself as sipped once race is full
 
   // !reset <name>
   if (content.startsWith('!reset ')) {
-    if (!isCommander) return;
+    if (!isCommander) return message.reply('Only a Quack Commander can reset the race.');
     const name = content.split(' ')[1].toLowerCase();
     const res = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, name]);
     if (res.rows.length === 0) return;
@@ -236,7 +212,7 @@ sipped — Mark yourself as sipped once race is full
 
   // !forceclose <name>
   if (content.startsWith('!forceclose ')) {
-    if (!isCommander) return;
+    if (!isCommander) return message.reply('Only a Quack Commander can force close the race.');
     const name = content.split(' ')[1].toLowerCase();
     const res = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 AND closed = false ORDER BY id DESC LIMIT 1', [channelId, name]);
     if (res.rows.length === 0) return;
