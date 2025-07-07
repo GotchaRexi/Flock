@@ -133,7 +133,7 @@ sipped — Mark yourself as sipped once race is full
   }
 
       // Handle "sipped" (now allowed even if race isn't full yet)
-  if (content.toLowerCase() === 'sipped' or 'sip') {
+    if (['sipped', 'sip'].includes(content.toLowerCase())) {
     const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1', [channelId]);
     if (rows.length === 0) return;
 
