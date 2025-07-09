@@ -189,7 +189,7 @@ sipped — Mark yourself as sipped once race is full
 
 
   // !list <name>
-  if (content.toLowerCase().startsWith('!list ')) {
+  /*if (content.toLowerCase().startsWith('!list ')) {
     const raceName = content.split(' ')[1].toLowerCase();
     const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
     if (raceRes.rows.length === 0) return message.reply('Race not found.');
@@ -199,7 +199,22 @@ sipped — Mark yourself as sipped once race is full
     if (entries.rows.length === 0) return message.channel.send('No entries yet.');
 
     return message.channel.send(`Entries for "${race.name}":\n${entries.rows.map(r => r.username).join('\n')}`);
-  }
+  }*/
+
+    // !list <name>
+if (content.toLowerCase().startsWith('!list ')) {
+  const raceName = content.split(' ')[1].toLowerCase();
+  const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
+  if (raceRes.rows.length === 0) return message.reply('Race not found.');
+
+  const race = raceRes.rows[0];
+  const entries = await db.query('SELECT username FROM entries WHERE race_id = $1', [race.id]);
+  if (entries.rows.length === 0) return message.channel.send('No entries yet.');
+
+  const formatted = entries.rows.map((r, i) => `${i + 1}. ${r.username}`).join('\n');
+  return message.channel.send(`Entries for "${race.name}":\n${formatted}`);
+}
+
 
     // Handle !status <name>
     if (content.toLowerCase().startsWith('!status ')) {
@@ -267,6 +282,42 @@ sipped — Mark yourself as sipped once race is full
     pendingWipes.delete(channelId);
     return message.channel.send('All race data has been wiped.');
   }
+
+  // !remove @user (Quack Commanders only)
+if (content.toLowerCase().startsWith('!remove ')) {
+  if (!isCommander) return message.reply('Only a Quack Commander can remove participants.');
+
+  const mentioned = message.mentions.users.first();
+  if (!mentioned) return message.reply('Please mention a user to remove.');
+
+  const raceRes = await db.query(
+    'SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1',
+    [channelId]
+  );
+  if (raceRes.rows.length === 0) return message.reply('No race found.');
+
+  const race = raceRes.rows[0];
+
+  const deleteRes = await db.query(
+    'DELETE FROM entries WHERE race_id = $1 AND user_id = $2 RETURNING *',
+    [race.id, mentioned.id]
+  );
+
+  if (deleteRes.rows.length === 0) {
+    return message.reply(`User <@${mentioned.id}> has no entries in the current race.`);
+  }
+
+  const spotsRestored = deleteRes.rows.length;
+
+  // Update race: increase remaining spots and reopen it
+  await db.query(
+    'UPDATE races SET remaining_spots = remaining_spots + $1, closed = false WHERE id = $2',
+    [spotsRestored, race.id]
+  );
+
+  return message.channel.send(`Removed ${spotsRestored} spot(s) for <@${mentioned.id}> from race "${race.name}". Race reopened.`);
+}
+
 });
 
 client.login(process.env.BOT_TOKEN);
