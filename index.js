@@ -197,6 +197,19 @@ vouch for @user — Mark someone else as vouched
 
   await db.query('INSERT INTO vouches (race_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [race.id, targetId]);
   await message.reply(`<@${targetId}> has been vouched for.`);
+
+  if (race.closed) {
+      const entrants = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
+      const sipped = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
+      const vouched = await db.query('SELECT user_id FROM vouches WHERE race_id = $1', [race.id]);
+      const coveredIds = new Set([...sipped.rows.map(r => r.user_id), ...vouched.rows.map(r => r.user_id)]);
+      const allSipped = entrants.rows.every(e => coveredIds.has(e.user_id));
+
+      if (allSipped) {
+        await message.channel.send(`@here The race is full, sipped, and ready to run!`);
+      }
+    }
+    return;
 }
 
 
