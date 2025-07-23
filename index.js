@@ -227,26 +227,48 @@ if (content.toLowerCase().startsWith('!list ')) {
       }
 
 // !remaining (not yet sipped or vouched)
-  if (content.toLowerCase().startsWith('!remaining ')) {
-    const raceName = content.split(' ')[1].toLowerCase();
+const remainingMatch = content.match(/^!remaining(?:\s+(\w+))?$/i);
+if (remainingMatch) {
+  const raceNameArg = remainingMatch[1] ? remainingMatch[1].toLowerCase() : null;
+  let race;
+  if (raceNameArg) {
     const raceRes = await db.query(
       'SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1',
-      [channelId, raceName]
+      [channelId, raceNameArg]
     );
     if (!raceRes.rows.length) return message.reply('Race not found.');
-    const race = raceRes.rows[0];
-
-    const entrants = await db.query('SELECT DISTINCT user_id, username FROM entries WHERE race_id = $1', [race.id]);
-    const sips = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
-    const vouches = await db.query('SELECT user_id FROM vouches WHERE race_id = $1', [race.id]);
-    const done = new Set([...sips.rows, ...vouches.rows].map(r => r.user_id));
-    const notDone = entrants.rows
-      .filter(e => !done.has(e.user_id))
-      .map(e => e.username)
-      .join(', ');
-
-    return message.channel.send(`Users not yet sipped or vouched: ${notDone}`);
+    race = raceRes.rows[0];
+  } else {
+    const raceRes = await db.query(
+      'SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1',
+      [channelId]
+    );
+    if (!raceRes.rows.length) return message.reply('No races found.');
+    race = raceRes.rows[0];
   }
+
+  const entrants = await db.query(
+    'SELECT DISTINCT user_id, username FROM entries WHERE race_id = $1',
+    [race.id]
+  );
+  const sipsArr = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
+  const vouchesArr = await db.query('SELECT user_id FROM vouches WHERE race_id = $1', [race.id]);
+  const done = new Set([
+    ...sipsArr.rows.map(r => r.user_id),
+    ...vouchesArr.rows.map(r => r.user_id)
+  ]);
+  const notDoneList = entrants.rows
+    .filter(e => !done.has(e.user_id))
+    .map(e => e.username)
+    .join(', ');
+
+  if (!notDoneList) {
+    return message.channel.send(`All participants have either sipped or vouched for race "${race.name}".`);
+  }
+  return message.channel.send(
+    `Users not yet sipped or vouched${raceNameArg ? ` for "${race.name}"` : ''}: ${notDoneList}`
+  );
+}
 
   // !cancel <name>
   if (content.toLowerCase().startsWith('!cancel ')) {
