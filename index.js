@@ -96,6 +96,7 @@ vouch for @user — Mark someone else as vouched
     for (let i = 0; i < claimCount; i++) {
       entries.push(`(${race.id}, '${targetId}', '${targetName.replace(/'/g, "''")}')`);
     }
+    await db.query('DELETE FROM sips WHERE race_id = $1 AND user_id = $2', [race.id, targetId]);
     await db.query(`INSERT INTO entries (race_id, user_id, username) VALUES ${entries.join(', ')}`);
     await db.query('UPDATE races SET remaining_spots = 0, closed = true WHERE id = $1', [race.id]);
 
@@ -109,7 +110,7 @@ vouch for @user — Mark someone else as vouched
     .map(r => `<@${r.user_id}>`)
     .join(', ');
 
-    await message.channel.send(`The race is now full! ${unsippedMentions} please sip when available.`);
+    await message.channel.send(`@here The race is now full! Please sip when available.`);
 
     return;
   }
