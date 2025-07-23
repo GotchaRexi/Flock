@@ -40,9 +40,13 @@ client.on('messageCreate', async (message) => {
     return message.channel.send(`**Duck Race Bot Commands:**
 !start <name> <spots> — Start a new race (Quack Commanders only)
 x<number> — Claim spots in the active race
+x<number> for @user — Claim spots for someone else
 sipped — Mark yourself as sipped once race is full
+vouch for @user — Mark someone else as vouched
 !list <name> — Show all individual entries in a race
 !status <name> — Show current summary of the race
+!remaining <name> — List users who haven't sipped or vouched
+!remove <@user> - Remove a user from the race and reopen the race if it was closed
 !cancel <name> — Cancel an active race (Quack Commanders only)
 !reset <name> — Clear all entries from a race (Quack Commanders only)
 !forceclose <name> — Force a race to close early (Quack Commanders only)`);
@@ -127,34 +131,11 @@ sipped — Mark yourself as sipped once race is full
       await db.query('UPDATE races SET closed = true WHERE id = $1', [race.id]);
       const finalEntries = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
       const mentions = finalEntries.rows.map(r => `<@${r.user_id}>`).join(', ');
-      await message.channel.send(`The race is now full! ${mentions} please sip when available.`);
+      await message.channel.send(`@here The race is now full! Please sip when available.`);
     }
     return;
   }
 
-      // Handle "sipped" (now allowed even if race isn't full yet)
-    /*if (['sipped', 'sip'].includes(content.toLowerCase())) {
-    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1', [channelId]);
-    if (rows.length === 0) return;
-
-    const race = rows[0];
-    const alreadySipped = await db.query('SELECT * FROM sips WHERE race_id = $1 AND user_id = $2', [race.id, message.author.id]);
-    if (alreadySipped.rows.length > 0) return message.reply('You already sipped this race.');
-
-    await db.query('INSERT INTO sips (race_id, user_id) VALUES ($1, $2)', [race.id, message.author.id]);
-    await message.reply('Sip recorded.');
-
-    if (race.closed) {
-      const entrants = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
-      const allSips = await db.query('SELECT DISTINCT user_id FROM sips WHERE race_id = $1', [race.id]);
-      const allSipped = entrants.rows.every(e => allSips.rows.some(s => s.user_id === e.user_id));
-
-      if (allSipped) {
-        await message.channel.send(`@here The race is full, sipped, and ready to run!`);
-      }
-    }
-    return;
-  }*/
 
       // Handle "sipped" (now allowed even if race isn't full yet)
     if (['sipped', 'sip'].includes(content.toLowerCase())) {
@@ -186,20 +167,29 @@ sipped — Mark yourself as sipped once race is full
   }
   return;
 }
+  // Vouch for someone
+  if (/^vouch(?: for <@!?(\d+)>)?$/i.test(content)) {
+    const match = content.match(/<@!?(\d+)>/);
+    const targetId = match ? match[1] : message.author.id;
+    const targetMember = match ? message.mentions.members.first() : message.member;
+    const targetName = targetMember?.displayName || 'Unknown';
 
+    const { rows } = await db.query(
+      'SELECT id FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1',
+      [channelId]
+    );
+    if (!rows.length) return;
+    const raceId = rows[0].id;
 
-  // !list <name>
-  /*if (content.toLowerCase().startsWith('!list ')) {
-    const raceName = content.split(' ')[1].toLowerCase();
-    const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
-    if (raceRes.rows.length === 0) return message.reply('Race not found.');
+    const already = await db.query(
+      'SELECT * FROM vouches WHERE race_id = $1 AND user_id = $2',
+      [raceId, targetId]
+    );
+    if (already.rows.length) return message.reply('That user has already been vouched this race.');
 
-    const race = raceRes.rows[0];
-    const entries = await db.query('SELECT username FROM entries WHERE race_id = $1', [race.id]);
-    if (entries.rows.length === 0) return message.channel.send('No entries yet.');
-
-    return message.channel.send(`Entries for "${race.name}":\n${entries.rows.map(r => r.username).join('\n')}`);
-  }*/
+    await db.query('INSERT INTO vouches (race_id, user_id) VALUES ($1, $2)', [raceId, targetId]);
+    return message.reply(`${targetName} has been vouched.`);
+  }
 
     // !list <name>
 if (content.toLowerCase().startsWith('!list ')) {
@@ -230,11 +220,33 @@ if (content.toLowerCase().startsWith('!list ')) {
     
         const statusList = entries.rows.map(entry => {
           const sipped = sipStatus.includes(entry.user_id);
-          return `${entry.username} - ${entry.count}${sipped ? ' - Sipped' : ''}`;
+          return `${sipped ? '✅ ' : ''}${entry.username} - ${entry.count}${sipped ? ' - Sipped' : ''}`;
         }).join('\n');
     
         return message.channel.send(`Race "${race.name}" Status: ${race.remaining_spots}/${race.total_spots} spots remaining.\n${statusList}`);
       }
+
+// !remaining (not yet sipped or vouched)
+  if (content.toLowerCase().startsWith('!remaining ')) {
+    const raceName = content.split(' ')[1].toLowerCase();
+    const raceRes = await db.query(
+      'SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1',
+      [channelId, raceName]
+    );
+    if (!raceRes.rows.length) return message.reply('Race not found.');
+    const race = raceRes.rows[0];
+
+    const entrants = await db.query('SELECT DISTINCT user_id, username FROM entries WHERE race_id = $1', [race.id]);
+    const sips = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
+    const vouches = await db.query('SELECT user_id FROM vouches WHERE race_id = $1', [race.id]);
+    const done = new Set([...sips.rows, ...vouches.rows].map(r => r.user_id));
+    const notDone = entrants.rows
+      .filter(e => !done.has(e.user_id))
+      .map(e => e.username)
+      .join(', ');
+
+    return message.channel.send(`Users not yet sipped or vouched: ${notDone}`);
+  }
 
   // !cancel <name>
   if (content.toLowerCase().startsWith('!cancel ')) {
