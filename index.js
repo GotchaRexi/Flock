@@ -228,22 +228,25 @@ if (content.toLowerCase().startsWith('!list ')) {
 
       //!remaining - users that still need to sip
 if (content.toLowerCase().startsWith('!remaining ')) {
-  const name = content.slice(7).trim();
-  const { rows: raceRows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2', [channelId, name]);
-  if (raceRows.length === 0) return message.reply('Race not found.');
+  const raceName = content.split(' ')[1].toLowerCase();
+  const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
+  if (raceRes.rows.length === 0) return message.reply('Race not found.');
 
-  const race = raceRows[0];
-  const { rows: entries } = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
-  const { rows: sips } = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
-  const { rows: vouches } = await db.query('SELECT user_id FROM vouches WHERE race_id = $1', [race.id]);
+  const race = raceRes.rows[0];
+  const entries = await db.query('SELECT DISTINCT user_id, username FROM entries WHERE race_id = $1', [race.id]);
+  const sipped = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
+  const vouches = await db.query('SELECT user_id FROM vouches WHERE race_id = $1', [race.id]);
 
-  const remaining = entries.filter(u => !sips.some(s => s.user_id === u.user_id) && !vouches.some(v => v.user_id === u.user_id));
-  if (remaining.length === 0) return message.reply('All users have sipped or been vouched.');
+  const doneIds = new Set([...sipped.rows.map(r => r.user_id), ...vouches.rows.map(r => r.user_id)]);
 
-  const mentions = remaining.map(u => `<@${u.user_id}>`).join('\n');
-  return message.channel.send(`Users who haven't sipped or been vouched in **${name}**:\n${mentions}`);
+  const remaining = entries.rows.filter(entry => !doneIds.has(entry.user_id));
+  if (remaining.length === 0) {
+    return message.channel.send(`All participants in race "${race.name}" have either sipped or been vouched.`);
+  }
+
+  const names = remaining.map(r => `${r.username}`).join('\n');
+  return message.channel.send(`Still need to sip or be vouched in race "${race.name}":\n${names}`);
 }
-
 
   // !cancel <name>
   if (content.toLowerCase().startsWith('!cancel ')) {
