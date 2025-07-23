@@ -169,8 +169,8 @@ vouch for @user — Mark someone else as vouched
 
   if (race.closed) {
     const entrants = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
-    const allSips = await db.query('SELECT DISTINCT user_id FROM sips WHERE race_id = $1', [race.id]);
-   // const allSipped = entrants.rows.every(e => allSips.rows.some(s => s.user_id === e.user_id));
+    //const allSips = await db.query('SELECT DISTINCT user_id FROM sips WHERE race_id = $1', [race.id]);
+    const sipped = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
     const vouched = await db.query('SELECT user_id FROM vouches WHERE race_id = $1', [race.id]);
     const coveredIds = new Set([...sipped.rows.map(r => r.user_id), ...vouched.rows.map(r => r.user_id)]);
     const allSipped = entrants.rows.every(e => coveredIds.has(String(e.user_id)));
