@@ -226,49 +226,24 @@ if (content.toLowerCase().startsWith('!list ')) {
         return message.channel.send(`Race "${race.name}" Status: ${race.remaining_spots}/${race.total_spots} spots remaining.\n${statusList}`);
       }
 
-// !remaining (not yet sipped or vouched)
-const remainingMatch = content.match(/^!remaining(?:\s+(\w+))?$/i);
-if (remainingMatch) {
-  const raceNameArg = remainingMatch[1] ? remainingMatch[1].toLowerCase() : null;
-  let race;
-  if (raceNameArg) {
-    const raceRes = await db.query(
-      'SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1',
-      [channelId, raceNameArg]
-    );
-    if (!raceRes.rows.length) return message.reply('Race not found.');
-    race = raceRes.rows[0];
-  } else {
-    const raceRes = await db.query(
-      'SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1',
-      [channelId]
-    );
-    if (!raceRes.rows.length) return message.reply('No races found.');
-    race = raceRes.rows[0];
-  }
+      //!remaining - users that still need to sip
+if (content.toLowerCase().startsWith('!remaining ')) {
+  const name = content.slice(7).trim();
+  const { rows: raceRows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND name = $2', [channelId, name]);
+  if (raceRows.length === 0) return message.reply('Race not found.');
 
-  const entrants = await db.query(
-    'SELECT DISTINCT user_id, username FROM entries WHERE race_id = $1',
-    [race.id]
-  );
-  const sipsArr = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
-  const vouchesArr = await db.query('SELECT user_id FROM vouches WHERE race_id = $1', [race.id]);
-  const done = new Set([
-    ...sipsArr.rows.map(r => r.user_id),
-    ...vouchesArr.rows.map(r => r.user_id)
-  ]);
-  const notDoneList = entrants.rows
-    .filter(e => !done.has(e.user_id))
-    .map(e => e.username)
-    .join(', ');
+  const race = raceRows[0];
+  const { rows: entries } = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
+  const { rows: sips } = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
+  const { rows: vouches } = await db.query('SELECT user_id FROM vouches WHERE race_id = $1', [race.id]);
 
-  if (!notDoneList) {
-    return message.channel.send(`All participants have either sipped or vouched for race "${race.name}".`);
-  }
-  return message.channel.send(
-    `Users not yet sipped or vouched${raceNameArg ? ` for "${race.name}"` : ''}: ${notDoneList}`
-  );
+  const remaining = entries.filter(u => !sips.some(s => s.user_id === u.user_id) && !vouches.some(v => v.user_id === u.user_id));
+  if (remaining.length === 0) return message.reply('All users have sipped or been vouched.');
+
+  const mentions = remaining.map(u => `<@${u.user_id}>`).join('\n');
+  return message.channel.send(`Users who haven't sipped or been vouched in **${name}**:\n${mentions}`);
 }
+
 
   // !cancel <name>
   if (content.toLowerCase().startsWith('!cancel ')) {
