@@ -195,7 +195,7 @@ vouch for @user — Mark someone else as vouched
 
 
     // !list <name>
-/*if (content.toLowerCase().startsWith('!list ')) {
+if (content.toLowerCase().startsWith('!list ')) {
   const raceName = content.split(' ')[1].toLowerCase();
   const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
   if (raceRes.rows.length === 0) return message.reply('Race not found.');
@@ -206,39 +206,11 @@ vouch for @user — Mark someone else as vouched
 
   const formatted = entries.rows.map((r, i) => `${i + 1}. ${r.username}`).join('\n');
   return message.channel.send(`Entries for "${race.name}":\n${formatted}`);
-}*/
-
-// !list <name>
-if (content.toLowerCase().startsWith('!list ')) {
-  const raceName = content.split(' ')[1].toLowerCase();
-  const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
-  if (raceRes.rows.length === 0) return message.reply('Race not found.');
-
-  const race = raceRes.rows[0];
-  const entries = await db.query('SELECT user_id, username FROM entries WHERE race_id = $1', [race.id]);
-  if (entries.rows.length === 0) return message.channel.send('No entries yet.');
-
-  const sipped = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
-  const vouched = await db.query('SELECT user_id FROM vouches WHERE race_id = $1', [race.id]);
-  const sippedSet = new Set(sipped.rows.map(r => r.user_id));
-  const vouchedSet = new Set(vouched.rows.map(r => r.user_id));
-
-  const formatted = entries.rows.map((r, i) => {
-    const status = sippedSet.has(r.user_id)
-      ? ' - Sipped'
-      : vouchedSet.has(r.user_id)
-      ? ' - Vouched'
-      : '';
-    return `${i + 1}. ${r.username}${status}`;
-  }).join('\n');
-
-  return message.channel.send(`Entries for "${race.name}":\n${formatted}`);
 }
 
 
-
     // Handle !status <name>
-    if (content.toLowerCase().startsWith('!status ')) {
+   /* if (content.toLowerCase().startsWith('!status ')) {
         const raceName = content.split(' ')[1].toLowerCase();
         const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
         if (raceRes.rows.length === 0) return message.reply('Race not found.');
@@ -255,7 +227,30 @@ if (content.toLowerCase().startsWith('!list ')) {
         }).join('\n');
     
         return message.channel.send(`Race "${race.name}" Status: ${race.remaining_spots}/${race.total_spots} spots remaining.\n${statusList}`);
-      }
+      }*/
+
+          //Handle !status <name>
+        if (content.toLowerCase().startsWith('!status ')) {
+    const raceName = content.split(' ')[1].toLowerCase();
+    const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
+    if (raceRes.rows.length === 0) return message.reply('Race not found.');
+    const race = raceRes.rows[0];
+    const entries = await db.query('SELECT user_id, username, COUNT(*) AS count FROM entries WHERE race_id = $1 GROUP BY user_id, username ORDER BY count DESC', [race.id]);
+    const sipped = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
+    const vouched = await db.query('SELECT user_id FROM vouches WHERE race_id = $1', [race.id]);
+    const sippedSet = new Set(sipped.rows.map(r => r.user_id));
+    const vouchedSet = new Set(vouched.rows.map(r => r.user_id));
+
+    const statusList = entries.rows.map(entry => {
+      const isSipped = sippedSet.has(entry.user_id);
+      const isVouched = vouchedSet.has(entry.user_id);
+      const mark = isSipped ? '✅ ' : '';
+      const status = isSipped ? ' - Sipped' : isVouched ? ' - Vouched' : '';
+      return `${mark}${entry.username} - ${entry.count}${status}`;
+    }).join('\n');
+
+    return message.channel.send(`Race "${race.name}" Status: ${race.remaining_spots}/${race.total_spots} spots remaining.\n${statusList}`);
+  }
 
       //!remaining - users that still need to sip
 if (content.toLowerCase().startsWith('!remaining')) {
