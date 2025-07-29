@@ -149,7 +149,7 @@ vouch for @user — Mark someone else as vouched
 
 
       // Handle "sipped" (now allowed even if race isn't full yet)
-    if (['sipped', 'sip'].includes(content.toLowerCase())) {
+    if (['sipped', 'sip', 'sipperood'].includes(content.toLowerCase())) {
   const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1', [channelId]);
   if (rows.length === 0) return;
 
