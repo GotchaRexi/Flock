@@ -359,7 +359,7 @@ if (content.toLowerCase().startsWith('!list ')) {
   if (raceRes.rows.length === 0) return message.reply('Race not found.');
 
   const race = raceRes.rows[0];
-  const entries = await db.query('SELECT username FROM entries WHERE race_id = $1', [race.id]);
+  const entries = await db.query('SELECT username FROM entries WHERE race_id = $1 ORDER BY id ASC', [race.id]);
   if (entries.rows.length === 0) return message.channel.send('No entries yet.');
 
   const formatted = entries.rows.map((r, i) => `${i + 1}. ${r.username}`).join('\n');
