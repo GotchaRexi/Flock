@@ -23,9 +23,22 @@ await db.query(`
   CREATE TABLE IF NOT EXISTS vouches (
     race_id INTEGER NOT NULL,
     user_id TEXT NOT NULL,
-    vouched_by TEXT NOT NULL,
     PRIMARY KEY (race_id, user_id)
   );
+`);
+
+// Add vouched_by column if it doesn't exist
+await db.query(`
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns 
+      WHERE table_name='vouches' AND column_name='vouched_by'
+    ) THEN
+      ALTER TABLE vouches ADD COLUMN vouched_by TEXT;
+    END IF;
+  END
+  $$;
 `);
 
 
