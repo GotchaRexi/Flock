@@ -362,8 +362,28 @@ if (content.toLowerCase().startsWith('!list ')) {
   const entries = await db.query('SELECT username FROM entries WHERE race_id = $1 ORDER BY id ASC', [race.id]);
   if (entries.rows.length === 0) return message.channel.send('No entries yet.');
 
-  const formatted = entries.rows.map((r, i) => `${i + 1}. ${r.username}`).join('\n');
-  return message.channel.send(`Entries for "${race.name}":\n${formatted}`);
+  // Split entries into chunks to avoid Discord's 2000 character limit
+  const header = `Entries for "${race.name}":`;
+  const maxLength = 1900; // Leave some buffer for safety
+  
+  let currentMessage = header;
+  let currentNumber = 1;
+  
+  for (const entry of entries.rows) {
+    const entryLine = `\n${currentNumber}. ${entry.username}`;
+    
+    // If adding this line would exceed the limit, send current message and start a new one
+    if ((currentMessage + entryLine).length > maxLength) {
+      await message.channel.send(currentMessage);
+      currentMessage = header + ` (continued):`;
+    }
+    
+    currentMessage += entryLine;
+    currentNumber++;
+  }
+  
+  // Send the final message
+  await message.channel.send(currentMessage);
 }
 
 
