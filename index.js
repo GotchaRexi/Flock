@@ -41,6 +41,20 @@ await db.query(`
   $$;
 `);
 
+// Add ready_message_sent column to races table if it doesn't exist
+await db.query(`
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM information_schema.columns 
+      WHERE table_name='races' AND column_name='ready_message_sent'
+    ) THEN
+      ALTER TABLE races ADD COLUMN ready_message_sent BOOLEAN DEFAULT FALSE;
+    END IF;
+  END
+  $$;
+`);
+
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
@@ -308,15 +322,14 @@ if (claimMatch) {
 
   if (race.closed) {
     const entrants = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
-    //const allSips = await db.query('SELECT DISTINCT user_id FROM sips WHERE race_id = $1', [race.id]);
     const sipped = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
     const vouched = await db.query('SELECT user_id FROM vouches WHERE race_id = $1', [race.id]);
     const coveredIds = new Set([...sipped.rows.map(r => r.user_id), ...vouched.rows.map(r => r.user_id)]);
     const allSipped = entrants.rows.every(e => coveredIds.has(String(e.user_id)));
 
-
-    if (allSipped) {
+    if (allSipped && !race.ready_message_sent) {
       await message.channel.send(`@here The race is full, sipped, and ready to run!`);
+      await db.query('UPDATE races SET ready_message_sent = true WHERE id = $1', [race.id]);
     }
   }
   return;
@@ -344,8 +357,9 @@ if (claimMatch) {
       const coveredIds = new Set([...sipped.rows.map(r => r.user_id), ...vouched.rows.map(r => r.user_id)]);
       const allSipped = entrants.rows.every(e => coveredIds.has(String(e.user_id)));
 
-      if (allSipped) {
+      if (allSipped && !race.ready_message_sent) {
         await message.channel.send(`@here The race is full, sipped, and ready to run!`);
+        await db.query('UPDATE races SET ready_message_sent = true WHERE id = $1', [race.id]);
       }
     }
     return;
