@@ -108,74 +108,6 @@ vouch for @user — Mark someone else as vouched
     return message.channel.send(`Race "${raceName}" (#${rows[0].race_number}) started with ${total} spots! Type X<number> to claim spots.`);
   }
 
-
-    // Handle x<number> or x<number> for @user or x close
-  /*const xCloseMatch = content.match(/^x\s*close$/i);
-  if (xCloseMatch) {
-    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
-    if (rows.length === 0) return;
-    const race = rows[0];
-    const targetId = message.author.id;
-    const targetName = message.member.displayName;
-    const claimCount = race.remaining_spots;
-
-    if (claimCount <= 0) return message.reply('There are no remaining spots to claim.');
-
-    const entries = [];
-    for (let i = 0; i < claimCount; i++) {
-      entries.push(`(${race.id}, '${targetId}', '${targetName.replace(/'/g, "''")}')`);
-    }
-    await db.query('DELETE FROM sips WHERE race_id = $1 AND user_id = $2', [race.id, targetId]);
-    await db.query(`INSERT INTO entries (race_id, user_id, username) VALUES ${entries.join(', ')}`);
-    await db.query('UPDATE races SET remaining_spots = 0, closed = true WHERE id = $1', [race.id]);
-
-
-    const finalEntries = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
-    const alreadySipped = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
-    const alreadySippedIds = new Set(alreadySipped.rows.map(r => r.user_id));
-
-    const unsippedMentions = finalEntries.rows
-    .filter(r => !alreadySippedIds.has(r.user_id))
-    .map(r => `<@${r.user_id}>`)
-    .join(', ');
-
-    await message.channel.send(`@here The race is now full! Please sip when available.`);
-
-    return;
-  }
-
-  const claimMatch = content.match(/^x(\d+)(?:\s+for\s+<@!?(\d+)>)*$/i);
-  if (claimMatch) {
-    const claimCount = parseInt(claimMatch[1]);
-    const targetId = claimMatch[2] || message.author.id;
-    const targetName = claimMatch[2] ? (message.mentions.members.first()?.displayName || 'Unknown') : message.member.displayName;
-
-    const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1', [channelId]);
-    if (rows.length === 0) return;
-
-    const race = rows[0];
-    if (claimCount > race.remaining_spots) return message.reply(`Only ${race.remaining_spots} spots left!`);
-
-    const entries = [];
-    for (let i = 0; i < claimCount; i++) {
-      entries.push(`(${race.id}, '${targetId}', '${targetName.replace(/'/g, "''")}')`);
-    }
-    await db.query('DELETE FROM sips WHERE race_id = $1 AND user_id = $2', [race.id, targetId]);
-    await db.query(`INSERT INTO entries (race_id, user_id, username) VALUES ${entries.join(', ')}`);
-    const newRemaining = race.remaining_spots - claimCount;
-    await db.query('UPDATE races SET remaining_spots = $1 WHERE id = $2', [newRemaining, race.id]);
-
-    await message.channel.send(`${targetName} claimed ${claimCount} spot(s). ${newRemaining} spot(s) remaining in race "${race.name}".`);
-
-    if (newRemaining === 0) {
-      await db.query('UPDATE races SET closed = true WHERE id = $1', [race.id]);
-      const finalEntries = await db.query('SELECT DISTINCT user_id FROM entries WHERE race_id = $1', [race.id]);
-      const mentions = finalEntries.rows.map(r => `<@${r.user_id}>`).join(', ');
-      await message.channel.send(`@here The race is now full! Please sip when available.`);
-    }
-    return;
-  }*/
-
     // --------------------
 // Simple in-memory lock wrapper
 // --------------------
@@ -358,7 +290,7 @@ if (claimMatch) {
       const allSipped = entrants.rows.every(e => coveredIds.has(String(e.user_id)));
 
       if (allSipped && !race.ready_message_sent) {
-        await message.channel.send(`@here The race is full, sipped, and ready to run!`);
+        await message.channel.send(`@here The race is ready to run!`);
         await db.query('UPDATE races SET ready_message_sent = true WHERE id = $1', [race.id]);
       }
     }
@@ -400,27 +332,6 @@ if (content.toLowerCase().startsWith('!list ')) {
   await message.channel.send(currentMessage);
 }
 
-
-    // Handle !status <name>
-   /* if (content.toLowerCase().startsWith('!status ')) {
-        const raceName = content.split(' ')[1].toLowerCase();
-        const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
-        if (raceRes.rows.length === 0) return message.reply('Race not found.');
-    
-        const race = raceRes.rows[0];
-        const entries = await db.query('SELECT user_id, username, COUNT(*) AS count FROM entries WHERE race_id = $1 GROUP BY user_id, username ORDER BY count DESC', [race.id]);
-    
-        const sipped = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
-        const sipStatus = sipped.rows.map(row => row.user_id);
-    
-        const statusList = entries.rows.map(entry => {
-          const sipped = sipStatus.includes(entry.user_id);
-          return `${sipped ? '✅ ' : ''}${entry.username} - ${entry.count}${sipped ? ' - Sipped' : ''}`;
-        }).join('\n');
-    
-        return message.channel.send(`Race "${race.name}" Status: ${race.remaining_spots}/${race.total_spots} spots remaining.\n${statusList}`);
-      }*/
-
           //Handle !status <name>
         if (content.toLowerCase().startsWith('!status ')) {
   const raceName = content.split(' ')[1].toLowerCase();
@@ -453,34 +364,6 @@ if (content.toLowerCase().startsWith('!list ')) {
   return message.channel.send(`Race "${race.name}" Status: ${race.remaining_spots}/${race.total_spots} spots remaining.\n${statusList.join('\n')}`);
 }
 
-        
-        
-          /*if (content.toLowerCase().startsWith('!status ')) {
-    const raceName = content.split(' ')[1].toLowerCase();
-    const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
-    if (raceRes.rows.length === 0) return message.reply('Race not found.');
-
-    const race = raceRes.rows[0];
-
-    const entries = await db.query('SELECT user_id, username, COUNT(*) AS count FROM entries WHERE race_id = $1 GROUP BY user_id, username ORDER BY count DESC', [race.id]);
-    
-    const sipped = await db.query('SELECT user_id FROM sips WHERE race_id = $1', [race.id]);
-    
-    const vouched = await db.query('SELECT user_id, vouched_by FROM vouches WHERE race_id = $1', [race.id]);
-    const vouchMap = new Map(vouched.rows.map(r => [r.user_id, r.vouched_by]));
-    const sippedSet = new Set(sipped.rows.map(r => r.user_id));
-    const vouchedSet = new Set(vouched.rows.map(r => r.user_id));
-
-    const statusList = entries.rows.map(entry => {
-      const isSipped = sippedSet.has(entry.user_id);
-      const isVouched = vouchedSet.has(entry.user_id);
-      const mark = isSipped ? '✅ ' : '';
-      const status = isSipped ? ' - Sipped' : isVouched ? ' - Vouched' : '';
-      return `${mark}${entry.username} - ${entry.count}${status}`;
-    }).join('\n');
-
-    return message.channel.send(`Race "${race.name}" Status: ${race.remaining_spots}/${race.total_spots} spots remaining.\n${statusList}`);
-  }*/
 
       //!remaining - users that still need to sip
 if (content.toLowerCase().startsWith('!remaining')) {
@@ -531,7 +414,9 @@ if (content.toLowerCase().startsWith('!remaining')) {
     if (res.rows.length === 0) return;
     const race = res.rows[0];
     await db.query('DELETE FROM entries WHERE race_id = $1', [race.id]);
-    await db.query('UPDATE races SET remaining_spots = total_spots, closed = false WHERE id = $1', [race.id]);
+    await db.query('DELETE FROM sips WHERE race_id = $1', [race.id]);
+    await db.query('DELETE FROM vouches WHERE race_id = $1', [race.id]);
+    await db.query('UPDATE races SET remaining_spots = total_spots, closed = false, ready_message_sent = false WHERE id = $1', [race.id]);
     return message.channel.send(`Entries reset for race "${name}".`);
   }
 
@@ -557,6 +442,7 @@ if (content.toLowerCase().startsWith('!remaining')) {
     await db.query('DELETE FROM entries');
     await db.query('DELETE FROM races');
     await db.query('DELETE FROM sips');
+    await db.query('DELETE FROM vouches');
     pendingWipes.delete(channelId);
     return message.channel.send('All race data has been wiped.');
   }
