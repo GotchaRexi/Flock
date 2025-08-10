@@ -102,7 +102,7 @@ vouch for @user — Mark someone else as vouched
     if (parseInt(res.rows[0].count) > 0) return message.reply('A race with that name is already running in this channel.');
 
     const { rows } = await db.query(
-      'INSERT INTO races (channel_id, name, race_number, total_spots, remaining_spots, closed) VALUES ($1, $2, COALESCE((SELECT MAX(race_number)+1 FROM races WHERE channel_id = $1), 1), $3, $3, false) RETURNING id, race_number',
+      'INSERT INTO races (channel_id, name, race_number, total_spots, remaining_spots, closed, ready_message_sent) VALUES ($1, $2, COALESCE((SELECT MAX(race_number)+1 FROM races WHERE channel_id = $1), 1), $3, $3, false, false) RETURNING id, race_number',
       [channelId, raceName, total]
     );
     return message.channel.send(`Race "${raceName}" (#${rows[0].race_number}) started with ${total} spots! Type X<number> to claim spots.`);
