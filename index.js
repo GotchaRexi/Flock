@@ -55,6 +55,15 @@ await db.query(`
   $$;
 `);
 
+// Create bourbon values table
+await db.query(`
+  CREATE TABLE IF NOT EXISTS bourbon_values (
+    bottle_name TEXT PRIMARY KEY,
+    value DECIMAL(10,2) NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
@@ -87,7 +96,9 @@ vouch for @user — Mark someone else as vouched
 !remove <@user> - Remove a user from the race and reopen the race if it was closed
 !cancel <name> — Cancel an active race (Quack Commanders only)
 !reset <name> — Clear all entries from a race (Quack Commanders only)
-!forceclose <name> — Force a race to close early (Quack Commanders only)`);
+!forceclose <name> — Force a race to close early (Quack Commanders only)
+!value <bottlename> [bottlename2] ... — List values for specified bourbons
+!updatevalue <bottlename> <value> — Update or add a bourbon value (Quack Commanders only)`);
   }
 
   // !start
@@ -481,6 +492,79 @@ if (content.toLowerCase().startsWith('!remove ')) {
 
   return message.channel.send(`Removed ${spotsRestored} spot(s) for <@${mentioned.id}> from race "${race.name}". Race reopened.`);
 }
+
+  // !value <bottlename> [bottlename2] ...
+  if (content.toLowerCase().startsWith('!value ')) {
+    const bottleNames = content.split(' ').slice(1);
+    if (bottleNames.length === 0) {
+      return message.reply('Please provide at least one bottle name. Usage: !value <bottlename> [bottlename2] ...');
+    }
+
+    let totalValue = 0;
+    let responseLines = ['**Bourbon Values:**'];
+
+    for (const bottleName of bottleNames) {
+      const result = await db.query(
+        'SELECT bottle_name, value FROM bourbon_values WHERE LOWER(bottle_name) = LOWER($1)',
+        [bottleName]
+      );
+
+      if (result.rows.length > 0) {
+        const bottle = result.rows[0];
+        const value = parseFloat(bottle.value);
+        totalValue += value;
+        responseLines.push(`• ${bottle.bottle_name}: $${value.toLocaleString()}`);
+      } else {
+        responseLines.push(`• ${bottleName}: Not found`);
+      }
+    }
+
+    responseLines.push(`\n**Total Value: $${totalValue.toLocaleString()}**`);
+    return message.channel.send(responseLines.join('\n'));
+  }
+
+  // !updatevalue <bottlename> <value>
+  if (content.toLowerCase().startsWith('!updatevalue ')) {
+    if (!isCommander) return message.reply('Only a Quack Commander can update bourbon values.');
+
+    const parts = content.split(' ');
+    if (parts.length < 3) {
+      return message.reply('Usage: !updatevalue <bottlename> <value>');
+    }
+
+    const bottleName = parts[1];
+    const valueStr = parts[2];
+
+    // Remove $ and commas from value
+    const cleanValue = valueStr.replace(/[$,]/g, '');
+    const value = parseFloat(cleanValue);
+
+    if (isNaN(value) || value < 0) {
+      return message.reply('Please provide a valid positive number for the value.');
+    }
+
+    // Check if bottle exists
+    const existingResult = await db.query(
+      'SELECT bottle_name FROM bourbon_values WHERE LOWER(bottle_name) = LOWER($1)',
+      [bottleName]
+    );
+
+    if (existingResult.rows.length > 0) {
+      // Update existing bottle
+      await db.query(
+        'UPDATE bourbon_values SET value = $1, updated_at = CURRENT_TIMESTAMP WHERE LOWER(bottle_name) = LOWER($2)',
+        [value, bottleName]
+      );
+      return message.channel.send(`Updated value for "${bottleName}" to $${value.toLocaleString()}.`);
+    } else {
+      // Add new bottle
+      await db.query(
+        'INSERT INTO bourbon_values (bottle_name, value) VALUES ($1, $2)',
+        [bottleName, value]
+      );
+      return message.channel.send(`Added "${bottleName}" with value $${value.toLocaleString()}.`);
+    }
+  }
 
 });
 
