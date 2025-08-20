@@ -271,7 +271,7 @@ if (claimMatch) {
     const allSipped = entrants.rows.every(e => coveredIds.has(String(e.user_id)));
 
     if (allSipped && !race.ready_message_sent) {
-      await message.channel.send(`@here The race is full, sipped, and ready to run!`);
+      await message.channel.send(`@here The race is ready to run!`);
       await db.query('UPDATE races SET ready_message_sent = true WHERE id = $1', [race.id]);
     }
   }
@@ -311,6 +311,7 @@ if (claimMatch) {
 
     // !list <name>
 if (content.toLowerCase().startsWith('!list ')) {
+  if (!isCommander) return message.reply('Only a Quack Commander can post the list.');
   const raceName = content.split(' ')[1].toLowerCase();
   const raceRes = await db.query('SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1', [channelId, raceName]);
   if (raceRes.rows.length === 0) return message.reply('Race not found.');
