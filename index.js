@@ -64,6 +64,14 @@ await db.query(`
   );
 `);
 
+// Create retired users table
+await db.query(`
+  CREATE TABLE IF NOT EXISTS retired_users (
+    user_id TEXT PRIMARY KEY,
+    retired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+`);
+
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
@@ -98,7 +106,45 @@ vouch for @user — Mark someone else as vouched
 !reset <name> — Clear all entries from a race (Quack Commanders only)
 !forceclose <name> — Force a race to close early (Quack Commanders only)
 !value <bottlename> [bottlename2] ... — List values for specified bourbons
-!updatevalue <bottlename> <value> — Update or add a bourbon value (Quack Commanders only)`);
+!updatevalue <bottlename> <value> — Update or add a bourbon value (Quack Commanders only)
+!retire — Retire from racing (no more entries allowed)
+!unretire — Unretire and return to racing`);
+  }
+
+  // !retire
+  if (content === '!retire') {
+    const retiredCheck = await db.query('SELECT * FROM retired_users WHERE user_id = $1', [message.author.id]);
+    if (retiredCheck.rows.length > 0) {
+      return message.reply('You are already retired from races.');
+    }
+    
+    await db.query('INSERT INTO retired_users (user_id) VALUES ($1)', [message.author.id]);
+    return message.reply('You have been retired from races. You can no longer enter any races.');
+  }
+
+  // !unretire
+  if (content === '!unretire') {
+    const retiredCheck = await db.query('SELECT * FROM retired_users WHERE user_id = $1', [message.author.id]);
+    if (retiredCheck.rows.length === 0) {
+      return message.reply('You are not currently retired from races.');
+    }
+    
+    return message.reply('Do you want to spend your rent money on bourbon? Type Yes for degenerate and No for smart decision');
+  }
+
+  // Handle unretire confirmation
+  if (content.toLowerCase() === 'yes' || content.toLowerCase() === 'no') {
+    const retiredCheck = await db.query('SELECT * FROM retired_users WHERE user_id = $1', [message.author.id]);
+    if (retiredCheck.rows.length === 0) {
+      return; // Not in unretire flow
+    }
+    
+    if (content.toLowerCase() === 'yes') {
+      await db.query('DELETE FROM retired_users WHERE user_id = $1', [message.author.id]);
+      return message.reply('Welcome back, degenerate! You can now enter races again.');
+    } else {
+      return message.reply('Smart choice. You remain retired from races.');
+    }
   }
 
   // !start
@@ -142,6 +188,12 @@ async function runExclusive(channelId, message, fn) {
 const xCloseMatch = content.match(/^x\s*close$/i);
 if (xCloseMatch) {
   return runExclusive(channelId, message, async () => {
+    // Check if user is retired
+    const retiredCheck = await db.query('SELECT * FROM retired_users WHERE user_id = $1', [message.author.id]);
+    if (retiredCheck.rows.length > 0) {
+      return message.reply('You are retired from races. Please take a moment to evaluate your choices');
+    }
+
     // 1) fetch latest open race
     const { rows } = await db.query(
       'SELECT id, remaining_spots FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1',
@@ -190,6 +242,12 @@ if (claimMatch) {
     const targetName = claimMatch[2]
       ? (message.mentions.members.first()?.displayName || 'Unknown')
       : message.member.displayName;
+
+    // Check if target user is retired
+    const retiredCheck = await db.query('SELECT * FROM retired_users WHERE user_id = $1', [targetId]);
+    if (retiredCheck.rows.length > 0) {
+      return message.reply('You are retired from races. Please take a moment to evaluate your choices');
+    }
 
     // fetch the open race
     const { rows } = await db.query(
