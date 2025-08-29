@@ -302,9 +302,10 @@ vouch for @user — Mark someone else as vouched
           if (!rows.length) return;
 
           const race = rows[0];
-          if (want > race.remaining_spots) {
-            return message.reply(`Only ${race.remaining_spots} spot(s) left!`);
-          }
+          
+          // If they want more spots than available, give them all remaining spots
+          const actualClaimed = Math.min(want, race.remaining_spots);
+          const wasLimited = want > race.remaining_spots;
 
           // remove any old sip
           await db.query(
@@ -313,7 +314,7 @@ vouch for @user — Mark someone else as vouched
           );
 
           // insert the new entries
-          const entriesSql = Array.from({ length: want }, () =>
+          const entriesSql = Array.from({ length: actualClaimed }, () =>
             `(${race.id}, '${targetId}', '${targetName.replace(/'/g, "''")}')`
           ).join(', ');
           await db.query(
@@ -321,7 +322,7 @@ vouch for @user — Mark someone else as vouched
           );
 
           // update remaining_spots (and close if zero)
-          const newRemaining = race.remaining_spots - want;
+          const newRemaining = race.remaining_spots - actualClaimed;
           await db.query(
             'UPDATE races SET remaining_spots = $1 WHERE id = $2',
             [newRemaining, race.id]
@@ -334,10 +335,13 @@ vouch for @user — Mark someone else as vouched
           }
 
           // notifications
-          await message.channel.send(
-            `${targetName} claimed ${want} spot(s). ` +
-            `${newRemaining} spot(s) remaining in race "${race.name}".`
-          );
+          let notificationMessage = `${targetName} claimed ${actualClaimed} spot(s)`;
+          if (wasLimited) {
+            notificationMessage += ` (only ${actualClaimed} spots were available)`;
+          }
+          notificationMessage += `. ${newRemaining} spot(s) remaining in race "${race.name}".`;
+          
+          await message.channel.send(notificationMessage);
           if (newRemaining === 0) {
             await message.channel.send(
               '@here The race is now full! Please sip when available.'
