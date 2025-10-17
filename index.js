@@ -387,6 +387,9 @@ vouch for @user — Mark someone else as vouched
       // Vouch for someone
       if (content.match(/^vouch\s+for\s+<@!?(\d+)>$/i)) {
         const [, targetId] = content.match(/^vouch\s+for\s+<@!?(\d+)>$/i);
+        if (targetId === message.author.id) {
+          return message.reply("You can no longer vouch for yourself, it doesn't make any sense. Please stop trying to find ways to beat the system.");
+        }
         const { rows } = await db.query('SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1', [channelId]);
         if (rows.length === 0) return;
         const race = rows[0];
