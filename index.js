@@ -482,7 +482,26 @@ vouch for @user — Mark someone else as vouched
           }
         }));
 
-        return message.channel.send(`Race "${race.name}" Status: ${race.remaining_spots}/${race.total_spots} spots remaining.\n${statusList.join('\n')}`);
+        // Split status into chunks to avoid Discord's 2000 character limit
+        const header = `Race "${race.name}" Status: ${race.remaining_spots}/${race.total_spots} spots remaining.`;
+        const maxLength = 1900; // Leave some buffer for safety
+        
+        let currentMessage = header;
+        
+        for (const statusLine of statusList) {
+          const statusLineWithNewline = `\n${statusLine}`;
+          
+          // If adding this line would exceed the limit, send current message and start a new one
+          if ((currentMessage + statusLineWithNewline).length > maxLength) {
+            await message.channel.send(currentMessage);
+            currentMessage = header + ` (continued):`;
+          }
+          
+          currentMessage += statusLineWithNewline;
+        }
+        
+        // Send the final message
+        await message.channel.send(currentMessage);
       }
 
       //!remaining - users that still need to sip
