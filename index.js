@@ -10,6 +10,66 @@ const { Client: PGClient } = pkg;
 const pendingClaims = new Set();
 const pendingWipes = new Map();
 
+// Queue system for processing claims in order per channel
+const claimQueues = new Map(); // channelId -> queue of pending claims
+
+// Process a claim queue for a channel
+async function processClaimQueue(channelId) {
+  const queue = claimQueues.get(channelId);
+  if (!queue || queue.processing || queue.items.length === 0) {
+    return;
+  }
+
+  queue.processing = true;
+
+  while (queue.items.length > 0) {
+    const claim = queue.items.shift();
+    try {
+      await claim.process();
+      if (claim.resolve) {
+        claim.resolve();
+      }
+    } catch (error) {
+      console.error('Error processing claim:', error);
+      if (claim.reject) {
+        claim.reject(error);
+      } else if (claim.message) {
+        claim.message.reply('An error occurred while processing your claim. Please try again.').catch(() => {});
+      }
+    }
+  }
+
+  queue.processing = false;
+  
+  // Clean up empty queues
+  if (queue.items.length === 0) {
+    claimQueues.delete(channelId);
+  }
+}
+
+// Add a claim to the queue
+function queueClaim(channelId, processFn, message) {
+  return new Promise((resolve, reject) => {
+    if (!claimQueues.has(channelId)) {
+      claimQueues.set(channelId, { items: [], processing: false });
+    }
+
+    const queue = claimQueues.get(channelId);
+    queue.items.push({ 
+      process: processFn, 
+      message,
+      resolve,
+      reject
+    });
+
+    // Start processing if not already processing
+    if (!queue.processing) {
+      // Use setImmediate to allow the current execution to complete
+      setImmediate(() => processClaimQueue(channelId));
+    }
+  });
+}
+
 // Global variables
 let db;
 let client;
@@ -211,20 +271,10 @@ vouch for @user — Mark someone else as vouched
       }
 
       // --------------------
-      // Simple in-memory lock wrapper
+      // Queue-based claim processing
       // --------------------
-      async function runExclusive(channelId, message, fn) {
-        if (pendingClaims.has(channelId)) {
-          return message.reply(
-            'Another claim is being processed—please wait a moment and try again.'
-          );
-        }
-        pendingClaims.add(channelId);
-        try {
-          await fn();
-        } finally {
-          pendingClaims.delete(channelId);
-        }
+      function queueClaimExclusive(channelId, message, fn) {
+        return queueClaim(channelId, fn, message);
       }
 
       // --------------------
@@ -232,47 +282,68 @@ vouch for @user — Mark someone else as vouched
       // --------------------
       const xCloseMatch = content.match(/^x\s*close$/i);
       if (xCloseMatch) {
-        return runExclusive(channelId, message, async () => {
+        return queueClaimExclusive(channelId, message, async () => {
           // Check if user is retired
           const retiredCheck = await db.query('SELECT * FROM retired_users WHERE user_id = $1', [message.author.id]);
           if (retiredCheck.rows.length > 0) {
             return message.reply('You are retired from races. Please take a moment to evaluate your choices');
           }
 
-          // 1) fetch latest open race
-          const { rows } = await db.query(
-            'SELECT id, remaining_spots FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1',
-            [channelId]
-          );
-          if (!rows.length) return;
+          // Use transaction with SELECT FOR UPDATE to ensure atomicity
+          await db.query('BEGIN');
+          try {
+            // 1) fetch latest open race with row lock
+            const { rows } = await db.query(
+              'SELECT id, remaining_spots FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1 FOR UPDATE',
+              [channelId]
+            );
+            if (!rows.length) {
+              // Check if a closed race exists to provide better error message
+              const raceCheck = await db.query(
+                'SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1',
+                [channelId]
+              );
+              await db.query('ROLLBACK');
+              if (raceCheck.rows.length && raceCheck.rows[0].closed) {
+                return message.reply('The race is full. No spots remaining.');
+              }
+              return;
+            }
 
-          const { id: raceId, remaining_spots: count } = rows[0];
-          if (count <= 0) {
-            return message.reply('There are no remaining spots to claim.');
+            const { id: raceId, remaining_spots: count } = rows[0];
+            if (count <= 0) {
+              await db.query('ROLLBACK');
+              return message.reply('There are no remaining spots to claim.');
+            }
+
+            // 2) delete any existing sips
+            await db.query(
+              'DELETE FROM sips WHERE race_id = $1 AND user_id = $2',
+              [raceId, message.author.id]
+            );
+
+            // 3) insert entries for all remaining spots
+            const entriesSql = Array.from({ length: count }, () =>
+              `(${raceId}, '${message.author.id}', '${message.member.displayName.replace(/'/g, "''")}')`
+            ).join(', ');
+            await db.query(
+              `INSERT INTO entries (race_id, user_id, username) VALUES ${entriesSql}`
+            );
+
+            // 4) mark race closed
+            await db.query(
+              'UPDATE races SET remaining_spots = 0, closed = true WHERE id = $1',
+              [raceId]
+            );
+
+            await db.query('COMMIT');
+
+            // 5) notify channel
+            await message.channel.send('@here The race is now full! Please sip when available.');
+          } catch (error) {
+            await db.query('ROLLBACK');
+            throw error;
           }
-
-          // 2) delete any existing sips
-          await db.query(
-            'DELETE FROM sips WHERE race_id = $1 AND user_id = $2',
-            [raceId, message.author.id]
-          );
-
-          // 3) insert entries for all remaining spots
-          const entriesSql = Array.from({ length: count }, () =>
-            `(${raceId}, '${message.author.id}', '${message.member.displayName.replace(/'/g, "''")}')`
-          ).join(', ');
-          await db.query(
-            `INSERT INTO entries (race_id, user_id, username) VALUES ${entriesSql}`
-          );
-
-          // 4) mark race closed
-          await db.query(
-            'UPDATE races SET remaining_spots = 0, closed = true WHERE id = $1',
-            [raceId]
-          );
-
-          // 5) notify channel
-          await message.channel.send('@here The race is now full! Please sip when available.');
         });
       }
 
@@ -281,7 +352,7 @@ vouch for @user — Mark someone else as vouched
       // --------------------
       const claimMatch = content.match(/^x(\d+)(?:\s+for\s+<@!?(\d+)>)?/i);
       if (claimMatch) {
-        return runExclusive(channelId, message, async () => {
+        return queueClaimExclusive(channelId, message, async () => {
           const want = parseInt(claimMatch[1], 10);
           const targetId = claimMatch[2] || message.author.id;
           const targetName = claimMatch[2]
@@ -294,58 +365,77 @@ vouch for @user — Mark someone else as vouched
             return message.reply('You are retired from races. Please take a moment to evaluate your choices');
           }
 
-          // fetch the open race
-          const { rows } = await db.query(
-            'SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1',
-            [channelId]
-          );
-          if (!rows.length) return;
+          // Use transaction with SELECT FOR UPDATE to ensure atomicity
+          await db.query('BEGIN');
+          try {
+            // fetch the open race with row lock
+            const { rows } = await db.query(
+              'SELECT * FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1 FOR UPDATE',
+              [channelId]
+            );
+            if (!rows.length) {
+              // Check if a closed race exists to provide better error message
+              const raceCheck = await db.query(
+                'SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1',
+                [channelId]
+              );
+              await db.query('ROLLBACK');
+              if (raceCheck.rows.length && raceCheck.rows[0].closed) {
+                return message.reply('The race is full. No spots remaining.');
+              }
+              return;
+            }
 
-          const race = rows[0];
-          
-          // If they want more spots than available, give them all remaining spots
-          const actualClaimed = Math.min(want, race.remaining_spots);
-          const wasLimited = want > race.remaining_spots;
+            const race = rows[0];
+            
+            // If they want more spots than available, give them all remaining spots
+            const actualClaimed = Math.min(want, race.remaining_spots);
+            const wasLimited = want > race.remaining_spots;
 
-          // remove any old sip
-          await db.query(
-            'DELETE FROM sips WHERE race_id = $1 AND user_id = $2',
-            [race.id, targetId]
-          );
+            if (actualClaimed <= 0) {
+              await db.query('ROLLBACK');
+              return message.reply('There are no remaining spots to claim.');
+            }
 
-          // insert the new entries
-          const entriesSql = Array.from({ length: actualClaimed }, () =>
-            `(${race.id}, '${targetId}', '${targetName.replace(/'/g, "''")}')`
-          ).join(', ');
-          await db.query(
-            `INSERT INTO entries (race_id, user_id, username) VALUES ${entriesSql}`
-          );
-
-          // update remaining_spots (and close if zero)
-          const newRemaining = race.remaining_spots - actualClaimed;
-          await db.query(
-            'UPDATE races SET remaining_spots = $1 WHERE id = $2',
-            [newRemaining, race.id]
-          );
-          if (newRemaining === 0) {
+            // remove any old sip
             await db.query(
-              'UPDATE races SET closed = true WHERE id = $1',
-              [race.id]
+              'DELETE FROM sips WHERE race_id = $1 AND user_id = $2',
+              [race.id, targetId]
             );
-          }
 
-          // notifications
-          let notificationMessage = `${targetName} claimed ${actualClaimed} spot(s)`;
-          if (wasLimited) {
-            notificationMessage += ` (only ${actualClaimed} spots were available)`;
-          }
-          notificationMessage += `. ${newRemaining} spot(s) remaining in race "${race.name}".`;
-          
-          await message.channel.send(notificationMessage);
-          if (newRemaining === 0) {
-            await message.channel.send(
-              '@here The race is now full! Please sip when available.'
+            // insert the new entries
+            const entriesSql = Array.from({ length: actualClaimed }, () =>
+              `(${race.id}, '${targetId}', '${targetName.replace(/'/g, "''")}')`
+            ).join(', ');
+            await db.query(
+              `INSERT INTO entries (race_id, user_id, username) VALUES ${entriesSql}`
             );
+
+            // update remaining_spots (and close if zero)
+            const newRemaining = race.remaining_spots - actualClaimed;
+            await db.query(
+              'UPDATE races SET remaining_spots = $1, closed = CASE WHEN $1 = 0 THEN true ELSE closed END WHERE id = $2',
+              [newRemaining, race.id]
+            );
+
+            await db.query('COMMIT');
+
+            // notifications
+            let notificationMessage = `${targetName} claimed ${actualClaimed} spot(s)`;
+            if (wasLimited) {
+              notificationMessage += ` (only ${actualClaimed} spots were available)`;
+            }
+            notificationMessage += `. ${newRemaining} spot(s) remaining in race "${race.name}".`;
+            
+            await message.channel.send(notificationMessage);
+            if (newRemaining === 0) {
+              await message.channel.send(
+                '@here The race is now full! Please sip when available.'
+              );
+            }
+          } catch (error) {
+            await db.query('ROLLBACK');
+            throw error;
           }
         });
       }
