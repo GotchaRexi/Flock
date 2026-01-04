@@ -171,6 +171,20 @@ async function initializeDatabase() {
       );
     `);
 
+    // Create voice monitoring table
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS voice_tracking (
+        user_id TEXT NOT NULL,
+        guild_id TEXT NOT NULL,
+        joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        total_time_minutes INTEGER DEFAULT 0,
+        speaking_time_minutes INTEGER DEFAULT 0,
+        is_muted BOOLEAN DEFAULT FALSE,
+        muted_at TIMESTAMP,
+        PRIMARY KEY (user_id, guild_id)
+      );
+    `);
+
     console.log('Database tables initialized');
   } catch (error) {
     console.error('Database initialization failed:', error);
@@ -181,12 +195,207 @@ async function initializeDatabase() {
 async function initializeDiscordBot() {
   try {
     client = new Client({
-      intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
+      intents: [
+        GatewayIntentBits.Guilds, 
+        GatewayIntentBits.GuildMessages, 
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildVoiceStates // Needed for voice monitoring
+      ],
       partials: [Partials.Message, Partials.Channel, Partials.Reaction]
     });
 
-    client.once('ready', () => {
+    client.once('ready', async () => {
       console.log(`Logged in as ${client.user.tag}`);
+      
+      // Check existing voice members on startup
+      for (const guild of client.guilds.cache.values()) {
+        for (const [memberId, member] of guild.members.cache) {
+          if (member.voice.channel && !member.voice.mute) {
+            const userId = member.id;
+            const guildId = guild.id;
+            
+            // Initialize tracking if not exists
+            await db.query(`
+              INSERT INTO voice_tracking (user_id, guild_id, joined_at)
+              VALUES ($1, $2, CURRENT_TIMESTAMP)
+              ON CONFLICT (user_id, guild_id) 
+              DO UPDATE SET joined_at = CURRENT_TIMESTAMP
+            `, [userId, guildId]).catch(() => {});
+            
+            voiceJoinTimes.set(`${guildId}-${userId}`, Date.now());
+          }
+        }
+      }
+      
+      // Periodic check every 5 minutes for users who should be muted
+      setInterval(async () => {
+        for (const guild of client.guilds.cache.values()) {
+          for (const [memberId, member] of guild.members.cache) {
+            if (member.voice.channel && !member.voice.mute && !member.voice.deaf && !member.user.bot) {
+              const userId = member.id;
+              const guildId = guild.id;
+              const joinTime = voiceJoinTimes.get(`${guildId}-${userId}`);
+              const speakingStart = speakingStartTimes.get(`${guildId}-${userId}`);
+              
+              if (joinTime) {
+                const timeInVoice = Math.floor((Date.now() - joinTime) / 60000);
+                const currentSpeakingTime = speakingStart ? Math.floor((Date.now() - speakingStart) / 60000) : 0;
+                
+                const timeResult = await db.query(`
+                  SELECT total_time_minutes, speaking_time_minutes FROM voice_tracking 
+                  WHERE user_id = $1 AND guild_id = $2
+                `, [userId, guildId]);
+                
+                const totalTime = (timeResult.rows[0]?.total_time_minutes || 0) + timeInVoice;
+                const totalSpeakingTime = (timeResult.rows[0]?.speaking_time_minutes || 0) + currentSpeakingTime;
+                
+                const shouldMute = totalSpeakingTime >= speakingMuteThreshold || totalTime >= voiceMuteThreshold;
+                
+                if (shouldMute) {
+                  try {
+                    const reason = totalSpeakingTime >= speakingMuteThreshold 
+                      ? `Auto-muted: Talking too much (${totalSpeakingTime} minutes)`
+                      : `Auto-muted: Too much time in voice chat (${totalTime} minutes)`;
+                    
+                    await member.voice.setMute(true, reason);
+                    await db.query(`
+                      UPDATE voice_tracking 
+                      SET is_muted = TRUE, muted_at = CURRENT_TIMESTAMP
+                      WHERE user_id = $1 AND guild_id = $2
+                    `, [userId, guildId]);
+                  } catch (error) {
+                    console.error('Error muting user:', error);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }, 5 * 60 * 1000); // Check every 5 minutes
+    });
+
+    // Voice state tracking
+    const voiceJoinTimes = new Map(); // user_id -> join timestamp
+    const speakingStartTimes = new Map(); // user_id -> when they started speaking (not muted/deafened)
+    let voiceMuteThreshold = 120; // minutes in voice before auto-mute (default 2 hours)
+    let speakingMuteThreshold = 60; // minutes of active speaking before auto-mute (default 1 hour)
+
+    // Track voice state changes
+    client.on('voiceStateUpdate', async (oldState, newState) => {
+      const userId = newState.member.id;
+      const guildId = newState.guild.id;
+      const member = newState.member;
+
+      // User joined a voice channel
+      if (!oldState.channelId && newState.channelId) {
+        voiceJoinTimes.set(`${guildId}-${userId}`, Date.now());
+        // Start tracking speaking time if not muted/deafened
+        if (!newState.mute && !newState.deaf) {
+          speakingStartTimes.set(`${guildId}-${userId}`, Date.now());
+        }
+        await db.query(`
+          INSERT INTO voice_tracking (user_id, guild_id, joined_at)
+          VALUES ($1, $2, CURRENT_TIMESTAMP)
+          ON CONFLICT (user_id, guild_id) 
+          DO UPDATE SET joined_at = CURRENT_TIMESTAMP, is_muted = FALSE
+        `, [userId, guildId]);
+      }
+
+      // User left a voice channel
+      if (oldState.channelId && !newState.channelId) {
+        const joinTime = voiceJoinTimes.get(`${guildId}-${userId}`);
+        const speakingStart = speakingStartTimes.get(`${guildId}-${userId}`);
+        
+        if (joinTime) {
+          const timeInVoice = Math.floor((Date.now() - joinTime) / 60000); // minutes
+          voiceJoinTimes.delete(`${guildId}-${userId}`);
+          
+          let speakingTime = 0;
+          if (speakingStart) {
+            speakingTime = Math.floor((Date.now() - speakingStart) / 60000);
+            speakingStartTimes.delete(`${guildId}-${userId}`);
+          }
+          
+          await db.query(`
+            UPDATE voice_tracking 
+            SET total_time_minutes = total_time_minutes + $1,
+                speaking_time_minutes = speaking_time_minutes + $4
+            WHERE user_id = $2 AND guild_id = $3
+          `, [timeInVoice, userId, guildId, speakingTime]);
+        }
+      }
+
+      // User started speaking (unmuted/undeafened)
+      if (newState.channelId && (oldState.mute !== newState.mute || oldState.deaf !== newState.deaf)) {
+        if (!newState.mute && !newState.deaf && (oldState.mute || oldState.deaf)) {
+          // User just unmuted/undeafened - start tracking speaking time
+          speakingStartTimes.set(`${guildId}-${userId}`, Date.now());
+        } else if ((newState.mute || newState.deaf) && !oldState.mute && !oldState.deaf) {
+          // User just muted/deafened - stop tracking and save speaking time
+          const speakingStart = speakingStartTimes.get(`${guildId}-${userId}`);
+          if (speakingStart) {
+            const speakingTime = Math.floor((Date.now() - speakingStart) / 60000);
+            speakingStartTimes.delete(`${guildId}-${userId}`);
+            
+            await db.query(`
+              UPDATE voice_tracking 
+              SET speaking_time_minutes = speaking_time_minutes + $1
+              WHERE user_id = $2 AND guild_id = $3
+            `, [speakingTime, userId, guildId]);
+          }
+        }
+      }
+
+      // Check if user should be auto-muted (speaking time or total time)
+      if (newState.channelId && !newState.mute && !newState.deaf) {
+        const joinTime = voiceJoinTimes.get(`${guildId}-${userId}`);
+        const speakingStart = speakingStartTimes.get(`${guildId}-${userId}`);
+        
+        if (joinTime) {
+          const timeInVoice = Math.floor((Date.now() - joinTime) / 60000);
+          const currentSpeakingTime = speakingStart ? Math.floor((Date.now() - speakingStart) / 60000) : 0;
+          
+          // Get totals from database
+          const timeResult = await db.query(`
+            SELECT total_time_minutes, speaking_time_minutes FROM voice_tracking 
+            WHERE user_id = $1 AND guild_id = $2
+          `, [userId, guildId]);
+          
+          const totalTime = (timeResult.rows[0]?.total_time_minutes || 0) + timeInVoice;
+          const totalSpeakingTime = (timeResult.rows[0]?.speaking_time_minutes || 0) + currentSpeakingTime;
+          
+          // Auto-mute if over speaking threshold (talking too much) OR total time threshold
+          const shouldMute = totalSpeakingTime >= speakingMuteThreshold || totalTime >= voiceMuteThreshold;
+          
+          if (shouldMute && member.voice && !member.voice.mute) {
+            try {
+              const reason = totalSpeakingTime >= speakingMuteThreshold 
+                ? `Auto-muted: Talking too much (${totalSpeakingTime} minutes of speaking time)`
+                : `Auto-muted: Too much time in voice chat (${totalTime} minutes)`;
+              
+              await member.voice.setMute(true, reason);
+              await db.query(`
+                UPDATE voice_tracking 
+                SET is_muted = TRUE, muted_at = CURRENT_TIMESTAMP
+                WHERE user_id = $1 AND guild_id = $2
+              `, [userId, guildId]);
+              
+              // Notify in a channel
+              const channel = newState.guild.channels.cache.find(
+                ch => ch.type === 0 && ch.name.toLowerCase().includes('general')
+              );
+              if (channel) {
+                const message = totalSpeakingTime >= speakingMuteThreshold
+                  ? `🔇 Auto-muted <@${userId}> - they've been talking for ${totalSpeakingTime} minutes.`
+                  : `🔇 Auto-muted <@${userId}> - they've been in voice chat for ${totalTime} minutes.`;
+                channel.send(message).catch(() => {});
+              }
+            } catch (error) {
+              console.error('Error muting user:', error);
+            }
+          }
+        }
+      }
     });
 
     client.on('messageCreate', async (message) => {
@@ -213,7 +422,14 @@ vouch for @user — Mark someone else as vouched
 !value <bottlename> [bottlename2] ... — List values for specified bourbons
 !updatevalue <bottlename> <value> — Update or add a bourbon value (Quack Commanders only)
 !retire — Retire from racing (no more entries allowed)
-!unretire — Unretire and return to racing`);
+!unretire — Unretire and return to racing
+
+**Voice Monitoring Commands:**
+!voicestats [@user] — Check voice chat time and speaking time for a user
+!unmute <@user> — Manually unmute a user (Quack Commanders only)
+!mutetime <minutes> — Set total time mute threshold (Quack Commanders only)
+!speakingtime <minutes> — Set speaking time mute threshold - mutes when talking too much (Quack Commanders only)
+!mutelist — List all currently muted users`);
       }
 
       // !retire
@@ -781,6 +997,123 @@ vouch for @user — Mark someone else as vouched
           );
           return message.channel.send(`Added "${bottleName}" with value $${value.toLocaleString()}.`);
         }
+      }
+
+      // Voice monitoring commands
+      // !voicestats [@user] - Check voice chat time
+      if (content.toLowerCase().startsWith('!voicestats')) {
+        const mentioned = message.mentions.users.first();
+        const targetId = mentioned ? mentioned.id : message.author.id;
+        const targetName = mentioned ? mentioned.displayName : message.member.displayName;
+
+        const stats = await db.query(`
+          SELECT total_time_minutes, speaking_time_minutes, is_muted, muted_at, joined_at
+          FROM voice_tracking
+          WHERE user_id = $1 AND guild_id = $2
+        `, [targetId, message.guild.id]);
+
+        if (stats.rows.length === 0) {
+          return message.reply(`${targetName} hasn't been tracked in voice chat yet.`);
+        }
+
+        const stat = stats.rows[0];
+        const totalHours = Math.floor(stat.total_time_minutes / 60);
+        const totalMinutes = stat.total_time_minutes % 60;
+        const speakingHours = Math.floor((stat.speaking_time_minutes || 0) / 60);
+        const speakingMinutes = (stat.speaking_time_minutes || 0) % 60;
+        const status = stat.is_muted ? '🔇 Muted' : '✅ Active';
+        
+        return message.channel.send(
+          `**Voice Stats for ${targetName}:**\n` +
+          `Total time in voice: ${totalHours}h ${totalMinutes}m\n` +
+          `Speaking time (active): ${speakingHours}h ${speakingMinutes}m\n` +
+          `Status: ${status}\n` +
+          `Speaking threshold: ${speakingMuteThreshold} min | Total threshold: ${voiceMuteThreshold} min`
+        );
+      }
+
+      // !unmute <@user> - Manually unmute someone (Quack Commanders only)
+      if (content.toLowerCase().startsWith('!unmute ')) {
+        if (!isCommander) return message.reply('Only a Quack Commander can unmute users.');
+        
+        const mentioned = message.mentions.members.first();
+        if (!mentioned) return message.reply('Please mention a user to unmute.');
+
+        try {
+          if (mentioned.voice && mentioned.voice.mute) {
+            await mentioned.voice.setMute(false, 'Manually unmuted by Quack Commander');
+            await db.query(`
+              UPDATE voice_tracking 
+              SET is_muted = FALSE, muted_at = NULL
+              WHERE user_id = $1 AND guild_id = $2
+            `, [mentioned.id, message.guild.id]);
+            return message.channel.send(`🔊 Unmuted <@${mentioned.id}>.`);
+          } else {
+            return message.reply('That user is not currently muted.');
+          }
+        } catch (error) {
+          console.error('Error unmuting user:', error);
+          return message.reply('Failed to unmute user. Make sure the bot has permission to manage voice states.');
+        }
+      }
+
+      // !mutetime <minutes> - Set total time mute threshold (Quack Commanders only)
+      if (content.toLowerCase().startsWith('!mutetime ')) {
+        if (!isCommander) return message.reply('Only a Quack Commander can set the mute threshold.');
+        
+        const parts = content.split(' ');
+        if (parts.length < 2) {
+          return message.reply('Usage: !mutetime <minutes>');
+        }
+
+        const minutes = parseInt(parts[1]);
+        if (isNaN(minutes) || minutes <= 0) {
+          return message.reply('Please provide a valid positive number of minutes.');
+        }
+
+        voiceMuteThreshold = minutes;
+        return message.channel.send(`Total time mute threshold set to ${minutes} minutes. Users will be auto-muted after this much total time in voice chat.`);
+      }
+
+      // !speakingtime <minutes> - Set speaking time mute threshold (Quack Commanders only)
+      if (content.toLowerCase().startsWith('!speakingtime ')) {
+        if (!isCommander) return message.reply('Only a Quack Commander can set the speaking threshold.');
+        
+        const parts = content.split(' ');
+        if (parts.length < 2) {
+          return message.reply('Usage: !speakingtime <minutes>');
+        }
+
+        const minutes = parseInt(parts[1]);
+        if (isNaN(minutes) || minutes <= 0) {
+          return message.reply('Please provide a valid positive number of minutes.');
+        }
+
+        speakingMuteThreshold = minutes;
+        return message.channel.send(`Speaking time mute threshold set to ${minutes} minutes. Users will be auto-muted when they talk for this long (while unmuted/undeafened).`);
+      }
+
+      // !mutelist - List all currently muted users
+      if (content.toLowerCase() === '!mutelist') {
+        const muted = await db.query(`
+          SELECT user_id, total_time_minutes, muted_at
+          FROM voice_tracking
+          WHERE guild_id = $1 AND is_muted = TRUE
+          ORDER BY muted_at DESC
+        `, [message.guild.id]);
+
+        if (muted.rows.length === 0) {
+          return message.channel.send('No users are currently muted.');
+        }
+
+        const mutedList = await Promise.all(muted.rows.map(async (row) => {
+          const user = await message.guild.members.fetch(row.user_id).catch(() => null);
+          const hours = Math.floor(row.total_time_minutes / 60);
+          const minutes = row.total_time_minutes % 60;
+          return `• ${user?.displayName || 'Unknown'}: ${hours}h ${minutes}m total`;
+        }));
+
+        return message.channel.send(`**Currently Muted Users:**\n${mutedList.join('\n')}`);
       }
     });
 
