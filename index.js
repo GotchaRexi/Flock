@@ -154,6 +154,20 @@ async function initializeDatabase() {
       $$;
     `);
 
+    // Add limit_per_participant column to races table if it doesn't exist
+    await db.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='races' AND column_name='limit_per_participant'
+        ) THEN
+          ALTER TABLE races ADD COLUMN limit_per_participant INTEGER;
+        END IF;
+      END
+      $$;
+    `);
+
     // Create bourbon values table
     await db.query(`
       CREATE TABLE IF NOT EXISTS bourbon_values (
@@ -407,7 +421,7 @@ async function initializeDiscordBot() {
 
       if (content === '!commands') {
         return message.channel.send(`**Duck Race Bot Commands:**
-!start <name> <spots> — Start a new race (Quack Commanders only)
+!start <name> <spots> [limit] — Start a new race (Quack Commanders only). Optional limit restricts entries per participant.
 x<number> — Claim spots in the active race
 x<number> for @user — Claim spots for someone else
 sipped — Mark yourself as sipped once race is full
@@ -469,21 +483,24 @@ vouch for @user — Mark someone else as vouched
       }
 
       // !start
-      const startMatch = content.match(/^!start\s+(\w+)\s+(\d+)$/i);
+      const startMatch = content.match(/^!start\s+(\w+)\s+(\d+)(?:\s+(\d+))?$/i);
       if (startMatch) {
         if (!isCommander) return message.reply('Only a Quack Commander can start the race.');
         const raceName = startMatch[1].toLocaleLowerCase();
         const total = parseInt(startMatch[2]);
-        if (!raceName || isNaN(total) || total <= 0) return message.reply('Usage: !start <name> <spots>');
+        const limit = startMatch[3] ? parseInt(startMatch[3]) : null;
+        if (!raceName || isNaN(total) || total <= 0) return message.reply('Usage: !start <name> <spots> [limit]');
+        if (limit !== null && (isNaN(limit) || limit <= 0)) return message.reply('Usage: !start <name> <spots> [limit] - limit must be a positive number');
 
         const res = await db.query('SELECT COUNT(*) FROM races WHERE channel_id = $1 AND LOWER(name) = $2 AND closed = false', [channelId, raceName]);
         if (parseInt(res.rows[0].count) > 0) return message.reply('A race with that name is already running in this channel.');
 
         const { rows } = await db.query(
-          'INSERT INTO races (channel_id, name, race_number, total_spots, remaining_spots, closed, ready_message_sent) VALUES ($1, $2, COALESCE((SELECT MAX(race_number)+1 FROM races WHERE channel_id = $1), 1), $3, $3, false, false) RETURNING id, race_number',
-          [channelId, raceName, total]
+          'INSERT INTO races (channel_id, name, race_number, total_spots, remaining_spots, closed, ready_message_sent, limit_per_participant) VALUES ($1, $2, COALESCE((SELECT MAX(race_number)+1 FROM races WHERE channel_id = $1), 1), $3, $3, false, false, $4) RETURNING id, race_number',
+          [channelId, raceName, total, limit]
         );
-        return message.channel.send(`Race "${raceName}" (#${rows[0].race_number}) started with ${total} spots! Type X<number> to claim spots.`);
+        const limitMsg = limit ? ` (limit: ${limit} entries per participant)` : '';
+        return message.channel.send(`Race "${raceName}" (#${rows[0].race_number}) started with ${total} spots${limitMsg}! Type X<number> to claim spots.`);
       }
 
       // --------------------
@@ -510,7 +527,7 @@ vouch for @user — Mark someone else as vouched
           try {
             // 1) fetch latest open race with row lock
             const { rows } = await db.query(
-              'SELECT id, remaining_spots FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1 FOR UPDATE',
+              'SELECT id, remaining_spots, limit_per_participant FROM races WHERE channel_id = $1 AND closed = false ORDER BY id DESC LIMIT 1 FOR UPDATE',
               [channelId]
             );
             if (!rows.length) {
@@ -526,10 +543,28 @@ vouch for @user — Mark someone else as vouched
               return;
             }
 
-            const { id: raceId, remaining_spots: count } = rows[0];
+            const { id: raceId, remaining_spots: count, limit_per_participant } = rows[0];
             if (count <= 0) {
               await db.query('ROLLBACK');
               return message.reply('There are no remaining spots to claim.');
+            }
+
+            // Check existing entries for this user
+            const existingEntries = await db.query(
+              'SELECT COUNT(*) FROM entries WHERE race_id = $1 AND user_id = $2',
+              [raceId, message.author.id]
+            );
+            const currentEntryCount = parseInt(existingEntries.rows[0].count);
+            
+            // Calculate how many entries the user can claim
+            let actualClaimed = count;
+            if (limit_per_participant !== null) {
+              const remainingFromLimit = limit_per_participant - currentEntryCount;
+              if (remainingFromLimit <= 0) {
+                await db.query('ROLLBACK');
+                return message.reply(`You have already reached the limit of ${limit_per_participant} entries for this race.`);
+              }
+              actualClaimed = Math.min(count, remainingFromLimit);
             }
 
             // 2) delete any existing sips
@@ -538,24 +573,29 @@ vouch for @user — Mark someone else as vouched
               [raceId, message.author.id]
             );
 
-            // 3) insert entries for all remaining spots
-            const entriesSql = Array.from({ length: count }, () =>
+            // 3) insert entries for the spots they can claim
+            const entriesSql = Array.from({ length: actualClaimed }, () =>
               `(${raceId}, '${message.author.id}', '${message.member.displayName.replace(/'/g, "''")}')`
             ).join(', ');
             await db.query(
               `INSERT INTO entries (race_id, user_id, username) VALUES ${entriesSql}`
             );
 
-            // 4) mark race closed
+            // 4) update remaining spots and mark race closed if all spots are taken
+            const newRemaining = count - actualClaimed;
             await db.query(
-              'UPDATE races SET remaining_spots = 0, closed = true WHERE id = $1',
-              [raceId]
+              'UPDATE races SET remaining_spots = $1, closed = CASE WHEN $1 = 0 THEN true ELSE closed END WHERE id = $2',
+              [newRemaining, raceId]
             );
 
             await db.query('COMMIT');
 
             // 5) notify channel
-            await message.channel.send('@here The race is now full! Please sip when available.');
+            if (newRemaining === 0) {
+              await message.channel.send('@here The race is now full! Please sip when available.');
+            } else {
+              await message.channel.send(`${message.member.displayName} claimed ${actualClaimed} spot(s) (limited by participant limit). ${newRemaining} spot(s) remaining.`);
+            }
           } catch (error) {
             await db.query('ROLLBACK');
             throw error;
@@ -604,12 +644,33 @@ vouch for @user — Mark someone else as vouched
 
             const race = rows[0];
             
-            // If they want more spots than available, give them all remaining spots
-            const actualClaimed = Math.min(want, race.remaining_spots);
-            const wasLimited = want > race.remaining_spots;
+            // Check existing entries for this user
+            const existingEntries = await db.query(
+              'SELECT COUNT(*) FROM entries WHERE race_id = $1 AND user_id = $2',
+              [race.id, targetId]
+            );
+            const currentEntryCount = parseInt(existingEntries.rows[0].count);
+            
+            // Calculate how many entries the user can claim
+            let maxAllowed = race.remaining_spots;
+            if (race.limit_per_participant !== null) {
+              const remainingFromLimit = race.limit_per_participant - currentEntryCount;
+              if (remainingFromLimit <= 0) {
+                await db.query('ROLLBACK');
+                return message.reply(`${targetName} has already reached the limit of ${race.limit_per_participant} entries for this race.`);
+              }
+              maxAllowed = Math.min(maxAllowed, remainingFromLimit);
+            }
+            
+            // If they want more spots than available, give them what they can claim
+            const actualClaimed = Math.min(want, maxAllowed);
+            const wasLimited = want > actualClaimed;
 
             if (actualClaimed <= 0) {
               await db.query('ROLLBACK');
+              if (race.limit_per_participant !== null && currentEntryCount >= race.limit_per_participant) {
+                return message.reply(`${targetName} has already reached the limit of ${race.limit_per_participant} entries for this race.`);
+              }
               return message.reply('There are no remaining spots to claim.');
             }
 
@@ -639,7 +700,11 @@ vouch for @user — Mark someone else as vouched
             // notifications
             let notificationMessage = `${targetName} claimed ${actualClaimed} spot(s)`;
             if (wasLimited) {
-              notificationMessage += ` (only ${actualClaimed} spots were available)`;
+              if (race.limit_per_participant !== null && currentEntryCount + actualClaimed >= race.limit_per_participant) {
+                notificationMessage += ` (limited to ${race.limit_per_participant} entries per participant)`;
+              } else {
+                notificationMessage += ` (only ${actualClaimed} spots were available)`;
+              }
             }
             notificationMessage += `. ${newRemaining} spot(s) remaining in race "${race.name}".`;
             
