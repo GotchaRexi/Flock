@@ -433,17 +433,10 @@ vouch for @user — Mark someone else as vouched
 !cancel <name> — Cancel an active race (Quack Commanders only)
 !reset <name> — Clear all entries from a race (Quack Commanders only)
 !forceclose <name> — Force a race to close early (Quack Commanders only)
-!value <bottlename> [bottlename2] ... — List values for specified bourbons
-!updatevalue <bottlename> <value> — Update or add a bourbon value (Quack Commanders only)
 !retire — Retire from racing (no more entries allowed)
 !unretire — Unretire and return to racing
 
-**Voice Monitoring Commands:**
-!voicestats [@user] — Check voice chat time and speaking time for a user
-!unmute <@user> — Manually unmute a user (Quack Commanders only)
-!mutetime <minutes> — Set total time mute threshold (Quack Commanders only)
-!speakingtime <minutes> — Set speaking time mute threshold - mutes when talking too much (Quack Commanders only)
-!mutelist — List all currently muted users`);
+);
       }
 
       // !retire
