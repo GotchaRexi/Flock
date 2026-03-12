@@ -9,6 +9,7 @@ config();
 const { Client: PGClient } = pkg;
 const pendingClaims = new Set();
 const pendingWipes = new Map();
+const pendingRaceSetups = new Map(); // key: `${channelId}:${userId}` -> step/data for !setrace
 
 // Queue system for processing claims in order per channel
 const claimQueues = new Map(); // channelId -> queue of pending claims
@@ -149,6 +150,34 @@ async function initializeDatabase() {
           WHERE table_name='races' AND column_name='ready_message_sent'
         ) THEN
           ALTER TABLE races ADD COLUMN ready_message_sent BOOLEAN DEFAULT FALSE;
+        END IF;
+      END
+      $$;
+    `);
+
+    // Add venmo-related columns to races table if they don't exist
+    await db.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='races' AND column_name='venmo_id'
+        ) THEN
+          ALTER TABLE races ADD COLUMN venmo_id TEXT;
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='races' AND column_name='last4_phone'
+        ) THEN
+          ALTER TABLE races ADD COLUMN last4_phone TEXT;
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='races' AND column_name='sip_amount'
+        ) THEN
+          ALTER TABLE races ADD COLUMN sip_amount INTEGER;
         END IF;
       END
       $$;
@@ -418,10 +447,13 @@ async function initializeDiscordBot() {
       const isCommander = message.member.roles.cache.some(role => role.name === 'Quack Commander');
       const channelId = message.channel.id;
       const content = message.content.trim();
+      const setupKey = `${channelId}:${message.author.id}`;
+      const currentSetup = pendingRaceSetups.get(setupKey);
 
       if (content === '!commands') {
         return message.channel.send(`**Duck Race Bot Commands:**
 !start <name> <spots> [limit] — Start a new race (Quack Commanders only). Optional limit restricts entries per participant.
+!setrace — Guided setup to start a new race (Quack Commanders only)
 x<number> — Claim spots in the active race
 x<number> for @user — Claim spots for someone else
 sipped — Mark yourself as sipped once race is full
@@ -433,10 +465,11 @@ vouch for @user — Mark someone else as vouched
 !cancel <name> — Cancel an active race (Quack Commanders only)
 !reset <name> — Clear all entries from a race (Quack Commanders only)
 !forceclose <name> — Force a race to close early (Quack Commanders only)
+!venmo — Show Venmo ID, last 4 phone, and sip amount for the latest race in this channel
 !retire — Retire from racing (no more entries allowed)
 !unretire — Unretire and return to racing
 
-);
+`);
       }
 
       // !retire
@@ -472,6 +505,216 @@ vouch for @user — Mark someone else as vouched
           return message.reply('Welcome back, degenerate! You can now enter races again.');
         } else {
           return message.reply('Smart choice. You remain retired from races.');
+        }
+      }
+
+      // Guided race setup: !setrace
+      if (content.toLowerCase() === '!setrace') {
+        if (!isCommander) return message.reply('Only a Quack Commander can start the race.');
+
+        // Start or reset the setup for this user in this channel
+        pendingRaceSetups.set(setupKey, {
+          step: 'name',
+          data: {}
+        });
+
+        return message.reply(
+          'Race setup started.\n' +
+          'Step 1/6: What is the race name? (one word, e.g. "ducks1").\n' +
+          'Type `cancel` to abort setup at any time.'
+        );
+      }
+
+      // Handle in-progress !setrace worksheet steps (non-command messages)
+      if (currentSetup && !content.startsWith('!')) {
+        const step = currentSetup.step;
+        const data = currentSetup.data;
+
+        // Allow user to cancel
+        if (content.toLowerCase() === 'cancel') {
+          pendingRaceSetups.delete(setupKey);
+          return message.reply('Race setup cancelled.');
+        }
+
+        try {
+          switch (step) {
+            case 'name': {
+              const raceNameRaw = content.trim();
+              const raceName = raceNameRaw.toLowerCase();
+
+              if (!/^\w+$/.test(raceNameRaw)) {
+                return message.reply('Race name must be a single word (letters, numbers, or underscore). Please enter the race name again.');
+              }
+
+              // Ensure no active race with this name in this channel
+              const existing = await db.query(
+                'SELECT COUNT(*) FROM races WHERE channel_id = $1 AND LOWER(name) = $2 AND closed = false',
+                [channelId, raceName]
+              );
+              if (parseInt(existing.rows[0].count, 10) > 0) {
+                return message.reply('A race with that name is already running in this channel. Please enter a different race name.');
+              }
+
+              data.name = raceName;
+              currentSetup.step = 'spots';
+              return message.reply('Step 2/6: How many total spots should this race have? (enter a positive whole number)');
+            }
+
+            case 'spots': {
+              const total = parseInt(content, 10);
+              if (isNaN(total) || total <= 0) {
+                return message.reply('Total spots must be a positive whole number. Please enter the number of spots.');
+              }
+
+              data.totalSpots = total;
+              currentSetup.step = 'limit';
+              return message.reply(
+                'Step 3/6: Optional per-participant limit.\n' +
+                'Enter a positive whole number to limit entries per participant, or type `none` to have no limit.'
+              );
+            }
+
+            case 'limit': {
+              const lower = content.toLowerCase();
+              let limit = null;
+
+              if (['none', 'no', 'skip'].includes(lower)) {
+                limit = null;
+              } else {
+                const parsed = parseInt(content, 10);
+                if (isNaN(parsed) || parsed <= 0) {
+                  return message.reply('Limit must be a positive whole number, or type `none` to disable the limit. Please enter the limit again.');
+                }
+                limit = parsed;
+              }
+
+              data.limit = limit;
+              currentSetup.step = 'venmo';
+              return message.reply(
+                'Step 4/6: Optional Venmo ID.\n' +
+                'Enter the Venmo ID (e.g. `@yourname`), or type `skip` to leave this blank.'
+              );
+            }
+
+            case 'venmo': {
+              const lower = content.toLowerCase();
+              if (['skip', 'none'].includes(lower)) {
+                data.venmoId = null;
+              } else {
+                data.venmoId = content.trim();
+              }
+
+              currentSetup.step = 'last4';
+              return message.reply(
+                'Step 5/6: Optional last 4 digits of the phone number.\n' +
+                'Enter exactly 4 digits, or type `skip` to leave this blank.'
+              );
+            }
+
+            case 'last4': {
+              const lower = content.toLowerCase();
+              if (['skip', 'none'].includes(lower)) {
+                data.last4Phone = null;
+              } else {
+                if (!/^\d{4}$/.test(content.trim())) {
+                  return message.reply('Last 4 phone digits must be exactly 4 numbers (e.g. `1234`), or type `skip` to leave this blank. Please enter again.');
+                }
+                data.last4Phone = content.trim();
+              }
+
+              currentSetup.step = 'sipAmount';
+              return message.reply(
+                'Step 6/6: Optional sip amount.\n' +
+                'Enter a positive whole number for the sip amount, or type `skip` to leave this blank.'
+              );
+            }
+
+            case 'sipAmount': {
+              const lower = content.toLowerCase();
+              let sipAmount = null;
+
+              if (['skip', 'none'].includes(lower)) {
+                sipAmount = null;
+              } else {
+                const parsed = parseInt(content, 10);
+                if (isNaN(parsed) || parsed <= 0) {
+                  return message.reply('Sip amount must be a positive whole number, or type `skip` to leave this blank. Please enter the sip amount again.');
+                }
+                sipAmount = parsed;
+              }
+
+              data.sipAmount = sipAmount;
+
+              // All data collected; create the race
+              const total = data.totalSpots;
+              const limit = data.limit;
+
+              const insertResult = await db.query(
+                `INSERT INTO races (
+                  channel_id, 
+                  name, 
+                  race_number, 
+                  total_spots, 
+                  remaining_spots, 
+                  closed, 
+                  ready_message_sent, 
+                  limit_per_participant,
+                  venmo_id,
+                  last4_phone,
+                  sip_amount
+                ) VALUES (
+                  $1, 
+                  $2, 
+                  COALESCE((SELECT MAX(race_number)+1 FROM races WHERE channel_id = $1), 1), 
+                  $3, 
+                  $3, 
+                  false, 
+                  false, 
+                  $4,
+                  $5,
+                  $6,
+                  $7
+                )
+                RETURNING id, race_number`,
+                [
+                  channelId,
+                  data.name,
+                  total,
+                  limit,
+                  data.venmoId,
+                  data.last4Phone,
+                  data.sipAmount
+                ]
+              );
+
+              pendingRaceSetups.delete(setupKey);
+
+              const raceNumber = insertResult.rows[0].race_number;
+              const limitMsg = limit ? ` (limit: ${limit} entries per participant)` : '';
+              let venmoMsg = '';
+
+              if (data.venmoId || data.last4Phone || data.sipAmount) {
+                const parts = [];
+                if (data.venmoId) parts.push(`Venmo: ${data.venmoId}`);
+                if (data.last4Phone) parts.push(`Last 4 phone: ${data.last4Phone}`);
+                if (data.sipAmount) parts.push(`Sip amount: ${data.sipAmount}`);
+                venmoMsg = `\nPayment info — ${parts.join(' | ')}`;
+              }
+
+              return message.channel.send(
+                `Race "${data.name}" (#${raceNumber}) started with ${total} spots${limitMsg}! Type X<number> to claim spots.${venmoMsg}`
+              );
+            }
+
+            default:
+              // Unknown step; reset
+              pendingRaceSetups.delete(setupKey);
+              return;
+          }
+        } catch (err) {
+          console.error('Error during !setrace setup flow:', err);
+          pendingRaceSetups.delete(setupKey);
+          return message.reply('Something went wrong while setting up the race. Please try `!setrace` again.');
         }
       }
 
@@ -897,6 +1140,50 @@ vouch for @user — Mark someone else as vouched
 
         const mentions = unsipped.map(row => `<@${row.user_id}>`).join(', ');
         return message.channel.send(`These participants still need to sip or be vouched: ${mentions}`);
+      }
+
+      // !venmo - show Venmo/payment info for the most recent race in this channel
+      if (content.toLowerCase().startsWith('!venmo')) {
+        // Optional: allow specifying a race name, otherwise default to latest race in this channel
+        const parts = content.split(' ').filter(Boolean);
+        let race;
+
+        if (parts.length > 1) {
+          const raceName = parts[1].toLowerCase();
+          const raceRes = await db.query(
+            'SELECT * FROM races WHERE channel_id = $1 AND LOWER(name) = $2 ORDER BY id DESC LIMIT 1',
+            [channelId, raceName]
+          );
+          if (raceRes.rows.length === 0) {
+            return message.reply('Race not found.');
+          }
+          race = raceRes.rows[0];
+        } else {
+          const raceRes = await db.query(
+            'SELECT * FROM races WHERE channel_id = $1 ORDER BY id DESC LIMIT 1',
+            [channelId]
+          );
+          if (raceRes.rows.length === 0) {
+            return message.reply('No races found in this channel yet.');
+          }
+          race = raceRes.rows[0];
+        }
+
+        const venmoId = race.venmo_id;
+        const last4Phone = race.last4_phone;
+        const sipAmount = race.sip_amount;
+
+        if (!venmoId && !last4Phone && (sipAmount === null || sipAmount === undefined)) {
+          return message.reply('No Venmo or sip information has been set for this race.');
+        }
+
+        const lines = ['**Race Payment Info:**'];
+        lines.push(`Race: "${race.name}" (#${race.race_number})`);
+        if (venmoId) lines.push(`Venmo ID: ${venmoId}`);
+        if (last4Phone) lines.push(`Last 4 Phone: ${last4Phone}`);
+        if (sipAmount !== null && sipAmount !== undefined) lines.push(`Sip Amount: ${sipAmount}`);
+
+        return message.channel.send(lines.join('\n'));
       }
 
       // !cancel <name>
