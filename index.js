@@ -625,25 +625,29 @@ vouch for @user — Mark someone else as vouched
               currentSetup.step = 'sipAmount';
               return message.reply(
                 'Step 6/6: Optional sip amount.\n' +
-                'Enter a positive whole number for the sip amount, or type `skip` to leave this blank.'
+                'Enter a positive dollar amount with up to 2 decimal places (e.g. `10`, `12.50`), or type `skip` to leave this blank.'
               );
             }
 
             case 'sipAmount': {
               const lower = content.toLowerCase();
-              let sipAmount = null;
+              let sipAmountCents = null;
 
               if (['skip', 'none'].includes(lower)) {
-                sipAmount = null;
+                sipAmountCents = null;
               } else {
-                const parsed = parseInt(content, 10);
-                if (isNaN(parsed) || parsed <= 0) {
-                  return message.reply('Sip amount must be a positive whole number, or type `skip` to leave this blank. Please enter the sip amount again.');
+                const trimmed = content.trim().replace(/^\$/, '');
+                if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) {
+                  return message.reply('Sip amount must be a positive dollar amount with up to 2 decimal places (e.g. `10`, `12.50`), or type `skip` to leave this blank. Please enter the sip amount again.');
                 }
-                sipAmount = parsed;
+                const parsed = parseFloat(trimmed);
+                if (isNaN(parsed) || parsed <= 0) {
+                  return message.reply('Sip amount must be a positive number, or type `skip` to leave this blank. Please enter the sip amount again.');
+                }
+                sipAmountCents = Math.round(parsed * 100);
               }
 
-              data.sipAmount = sipAmount;
+              data.sipAmount = sipAmountCents;
 
               // All data collected; create the race
               const total = data.totalSpots;
@@ -697,7 +701,10 @@ vouch for @user — Mark someone else as vouched
                 const parts = [];
                 if (data.venmoId) parts.push(`Venmo: ${data.venmoId}`);
                 if (data.last4Phone) parts.push(`Last 4 phone: ${data.last4Phone}`);
-                if (data.sipAmount) parts.push(`Sip amount: ${data.sipAmount}`);
+                if (data.sipAmount) {
+                  const dollars = (data.sipAmount / 100).toFixed(2);
+                  parts.push(`Sip amount: $${dollars}`);
+                }
                 venmoMsg = `\nPayment info — ${parts.join(' | ')}`;
               }
 
@@ -1171,9 +1178,9 @@ vouch for @user — Mark someone else as vouched
 
         const venmoId = race.venmo_id;
         const last4Phone = race.last4_phone;
-        const sipAmount = race.sip_amount;
+        const sipAmountCents = race.sip_amount;
 
-        if (!venmoId && !last4Phone && (sipAmount === null || sipAmount === undefined)) {
+        if (!venmoId && !last4Phone && (sipAmountCents === null || sipAmountCents === undefined)) {
           return message.reply('No Venmo or sip information has been set for this race.');
         }
 
@@ -1181,7 +1188,10 @@ vouch for @user — Mark someone else as vouched
         lines.push(`Race: "${race.name}" (#${race.race_number})`);
         if (venmoId) lines.push(`Venmo ID: ${venmoId}`);
         if (last4Phone) lines.push(`Last 4 Phone: ${last4Phone}`);
-        if (sipAmount !== null && sipAmount !== undefined) lines.push(`Sip Amount: ${sipAmount}`);
+        if (sipAmountCents !== null && sipAmountCents !== undefined) {
+          const dollars = (sipAmountCents / 100).toFixed(2);
+          lines.push(`Sip Amount: $${dollars}`);
+        }
 
         return message.channel.send(lines.join('\n'));
       }
@@ -1344,122 +1354,6 @@ vouch for @user — Mark someone else as vouched
         }
       }
 
-      // Voice monitoring commands
-      // !voicestats [@user] - Check voice chat time
-      if (content.toLowerCase().startsWith('!voicestats')) {
-        const mentioned = message.mentions.users.first();
-        const targetId = mentioned ? mentioned.id : message.author.id;
-        const targetName = mentioned ? mentioned.displayName : message.member.displayName;
-
-        const stats = await db.query(`
-          SELECT total_time_minutes, speaking_time_minutes, is_muted, muted_at, joined_at
-          FROM voice_tracking
-          WHERE user_id = $1 AND guild_id = $2
-        `, [targetId, message.guild.id]);
-
-        if (stats.rows.length === 0) {
-          return message.reply(`${targetName} hasn't been tracked in voice chat yet.`);
-        }
-
-        const stat = stats.rows[0];
-        const totalHours = Math.floor(stat.total_time_minutes / 60);
-        const totalMinutes = stat.total_time_minutes % 60;
-        const speakingHours = Math.floor((stat.speaking_time_minutes || 0) / 60);
-        const speakingMinutes = (stat.speaking_time_minutes || 0) % 60;
-        const status = stat.is_muted ? '🔇 Muted' : '✅ Active';
-        
-        return message.channel.send(
-          `**Voice Stats for ${targetName}:**\n` +
-          `Total time in voice: ${totalHours}h ${totalMinutes}m\n` +
-          `Speaking time (active): ${speakingHours}h ${speakingMinutes}m\n` +
-          `Status: ${status}\n` +
-          `Speaking threshold: ${speakingMuteThreshold} min | Total threshold: ${voiceMuteThreshold} min`
-        );
-      }
-
-      // !unmute <@user> - Manually unmute someone (Quack Commanders only)
-      if (content.toLowerCase().startsWith('!unmute ')) {
-        if (!isCommander) return message.reply('Only a Quack Commander can unmute users.');
-        
-        const mentioned = message.mentions.members.first();
-        if (!mentioned) return message.reply('Please mention a user to unmute.');
-
-        try {
-          if (mentioned.voice && mentioned.voice.mute) {
-            await mentioned.voice.setMute(false, 'Manually unmuted by Quack Commander');
-            await db.query(`
-              UPDATE voice_tracking 
-              SET is_muted = FALSE, muted_at = NULL
-              WHERE user_id = $1 AND guild_id = $2
-            `, [mentioned.id, message.guild.id]);
-            return message.channel.send(`🔊 Unmuted <@${mentioned.id}>.`);
-          } else {
-            return message.reply('That user is not currently muted.');
-          }
-        } catch (error) {
-          console.error('Error unmuting user:', error);
-          return message.reply('Failed to unmute user. Make sure the bot has permission to manage voice states.');
-        }
-      }
-
-      // !mutetime <minutes> - Set total time mute threshold (Quack Commanders only)
-      if (content.toLowerCase().startsWith('!mutetime ')) {
-        if (!isCommander) return message.reply('Only a Quack Commander can set the mute threshold.');
-        
-        const parts = content.split(' ');
-        if (parts.length < 2) {
-          return message.reply('Usage: !mutetime <minutes>');
-        }
-
-        const minutes = parseInt(parts[1]);
-        if (isNaN(minutes) || minutes <= 0) {
-          return message.reply('Please provide a valid positive number of minutes.');
-        }
-
-        voiceMuteThreshold = minutes;
-        return message.channel.send(`Total time mute threshold set to ${minutes} minutes. Users will be auto-muted after this much total time in voice chat.`);
-      }
-
-      // !speakingtime <minutes> - Set speaking time mute threshold (Quack Commanders only)
-      if (content.toLowerCase().startsWith('!speakingtime ')) {
-        if (!isCommander) return message.reply('Only a Quack Commander can set the speaking threshold.');
-        
-        const parts = content.split(' ');
-        if (parts.length < 2) {
-          return message.reply('Usage: !speakingtime <minutes>');
-        }
-
-        const minutes = parseInt(parts[1]);
-        if (isNaN(minutes) || minutes <= 0) {
-          return message.reply('Please provide a valid positive number of minutes.');
-        }
-
-        speakingMuteThreshold = minutes;
-        return message.channel.send(`Speaking time mute threshold set to ${minutes} minutes. Users will be auto-muted when they talk for this long (while unmuted/undeafened).`);
-      }
-
-      // !mutelist - List all currently muted users
-      if (content.toLowerCase() === '!mutelist') {
-        const muted = await db.query(`
-          SELECT user_id, total_time_minutes, muted_at
-          FROM voice_tracking
-          WHERE guild_id = $1 AND is_muted = TRUE
-          ORDER BY muted_at DESC
-        `, [message.guild.id]);
-
-        if (muted.rows.length === 0) {
-          return message.channel.send('No users are currently muted.');
-        }
-
-        const mutedList = await Promise.all(muted.rows.map(async (row) => {
-          const user = await message.guild.members.fetch(row.user_id).catch(() => null);
-          const hours = Math.floor(row.total_time_minutes / 60);
-          const minutes = row.total_time_minutes % 60;
-          return `• ${user?.displayName || 'Unknown'}: ${hours}h ${minutes}m total`;
-        }));
-
-        return message.channel.send(`**Currently Muted Users:**\n${mutedList.join('\n')}`);
-      }
     });
 
     // Login to Discord
