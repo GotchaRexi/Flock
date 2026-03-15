@@ -76,6 +76,12 @@ let db;
 let client;
 let server;
 
+// Simple logger for unexpected errors
+function logFatalError(context, error) {
+  const timestamp = new Date().toISOString();
+  console.error(`[${timestamp}] [FATAL] ${context}:`, error);
+}
+
 // Graceful shutdown handler
 function gracefulShutdown(signal) {
   console.log(`Received ${signal}. Starting graceful shutdown...`);
@@ -103,6 +109,18 @@ function gracefulShutdown(signal) {
 // Handle shutdown signals
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Global error handlers for common crash scenarios
+process.on('unhandledRejection', (reason) => {
+  logFatalError('Unhandled Promise Rejection', reason);
+  // Inconsistent state is possible, so exit and let the process manager restart us
+  gracefulShutdown('unhandledRejection');
+});
+
+process.on('uncaughtException', (error) => {
+  logFatalError('Uncaught Exception', error);
+  gracefulShutdown('uncaughtException');
+});
 
 async function initializeDatabase() {
   try {
@@ -234,6 +252,15 @@ async function initializeDiscordBot() {
 
     client.once('ready', async () => {
       console.log(`Logged in as ${client.user.tag}`);
+    });
+
+    // Discord client-level error logging
+    client.on('error', (error) => {
+      console.error('Discord client error:', error);
+    });
+
+    client.on('shardError', (error) => {
+      console.error('A websocket connection encountered an error:', error);
     });
 
     client.on('messageCreate', async (message) => {
