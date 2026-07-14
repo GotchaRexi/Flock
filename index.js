@@ -307,6 +307,23 @@ vouch for @user — Mark someone else as vouched
         return message.reply('You have been retired from races. You can no longer enter any races.');
       }
 
+      // !unretireqc @user — Quack Commander force unretire (bypasses 24h wait)
+      if (content.toLowerCase().startsWith('!unretireqc')) {
+        if (!isCommander) return message.reply('Only a Quack Commander can use this command.');
+
+        const mentioned = message.mentions.users.first();
+        if (!mentioned) return message.reply('Usage: !unretireqc @user');
+
+        const retiredCheck = await db.query('SELECT * FROM retired_users WHERE user_id = $1', [mentioned.id]);
+        if (retiredCheck.rows.length === 0) {
+          return message.reply(`<@${mentioned.id}> is not currently retired from races.`);
+        }
+
+        await db.query('DELETE FROM retired_users WHERE user_id = $1', [mentioned.id]);
+        pendingUnretires.delete(mentioned.id);
+        return message.channel.send(`<@${mentioned.id}> has been unretired by a Quack Commander and can enter races again.`);
+      }
+
       // !unretire
       if (content === '!unretire') {
         const retiredCheck = await db.query('SELECT user_id, retired_at FROM retired_users WHERE user_id = $1', [message.author.id]);
