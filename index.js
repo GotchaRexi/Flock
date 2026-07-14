@@ -10,6 +10,7 @@ const { Client: PGClient } = pkg;
 const pendingClaims = new Set();
 const pendingWipes = new Map();
 const pendingRaceSetups = new Map(); // key: `${channelId}:${userId}` -> step/data for !setrace
+const pendingUnretires = new Set(); // userIds waiting to confirm !unretire with yes/no
 
 // Queue system for processing claims in order per channel
 const claimQueues = new Map(); // channelId -> queue of pending claims
@@ -302,30 +303,36 @@ vouch for @user — Mark someone else as vouched
         }
         
         await db.query('INSERT INTO retired_users (user_id) VALUES ($1)', [message.author.id]);
+        pendingUnretires.delete(message.author.id);
         return message.reply('You have been retired from races. You can no longer enter any races.');
       }
 
       // !unretire
       if (content === '!unretire') {
-        const retiredCheck = await db.query('SELECT * FROM retired_users WHERE user_id = $1', [message.author.id]);
+        const retiredCheck = await db.query('SELECT user_id, retired_at FROM retired_users WHERE user_id = $1', [message.author.id]);
         if (retiredCheck.rows.length === 0) {
           return message.reply('You are not currently retired from races.');
         }
-        
+
+        const retiredAt = new Date(retiredCheck.rows[0].retired_at);
+        const hoursSinceRetire = (Date.now() - retiredAt.getTime()) / (1000 * 60 * 60);
+        if (hoursSinceRetire < 24) {
+          const hoursRemaining = Math.ceil(24 - hoursSinceRetire);
+          return message.reply(`You cannot unretire yet. Please wait ${hoursRemaining} more hour${hoursRemaining === 1 ? '' : 's'}.`);
+        }
+
+        pendingUnretires.add(message.author.id);
         return message.reply('Do you want to spend your rent money on bourbon? Type Yes for degenerate and No for smart decision');
       }
 
-      // Handle unretire confirmation
-      if (content.toLowerCase() === 'yes' || content.toLowerCase() === 'no') {
-        const retiredCheck = await db.query('SELECT * FROM retired_users WHERE user_id = $1', [message.author.id]);
-        if (retiredCheck.rows.length === 0) {
-          return; // Not in unretire flow
-        }
-        
+      // Handle unretire confirmation (only after a recent !unretire prompt)
+      if (pendingUnretires.has(message.author.id) && (content.toLowerCase() === 'yes' || content.toLowerCase() === 'no')) {
         if (content.toLowerCase() === 'yes') {
           await db.query('DELETE FROM retired_users WHERE user_id = $1', [message.author.id]);
+          pendingUnretires.delete(message.author.id);
           return message.reply('Welcome back, degenerate! You can now enter races again.');
         } else {
+          pendingUnretires.delete(message.author.id);
           return message.reply('Smart choice. You remain retired from races.');
         }
       }
